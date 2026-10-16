@@ -1,0 +1,148 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "System user account with 9-digit login ID, role, and status",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 100 },
+        "loginId": { "type": "string", "pattern": "^[0-9]{9}$" },
+        "role": { "type": "string", "enum": ["ADMIN", "HEAD_OF_SALES", "SALES_REPRESENTATIVE", "DESIGNER"] },
+        "active": { "type": "boolean" },
+        "assignedDesignerId": { "type": "string", "maxLength": 128 },
+        "assignedDesignerName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastActivityAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "name", "loginId", "role", "active", "createdAt", "updatedAt"]
+    },
+    "MockupRequest": {
+      "title": "MockupRequest",
+      "description": "Mockup design request submitted by sales representative to assigned designer",
+      "type": "object",
+      "properties": {
+        "requestId": { "type": "string", "pattern": "^M[0-9]{6}$" },
+        "source": { "type": "string", "enum": ["gallabox", "whatsapp", "email", "others"] },
+        "mockupTitle": { "type": "string", "maxLength": 200 },
+        "itemName": { "type": "string", "maxLength": 200 },
+        "clientName": { "type": "string", "maxLength": 120 },
+        "clientMobileNumber": { "type": "string", "maxLength": 50 },
+        "contactBy": { "type": "string", "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 4000 },
+        "referenceLinks": { "type": "string", "maxLength": 2000 },
+        "additionalLinks": { "type": "string", "maxLength": 2000 },
+        "attachments": { "type": "array" },
+        "salesRepresentativeId": { "type": "string", "maxLength": 128 },
+        "salesRepresentativeName": { "type": "string", "maxLength": 100 },
+        "designerId": { "type": "string", "maxLength": 128 },
+        "designerName": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["PENDING", "REJECTED", "COMPLETED"] },
+        "priority": { "type": "string", "enum": ["REGULAR", "URGENT", "SUPER_URGENT"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "assignedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "completedBy": { "type": "string", "maxLength": 128 },
+        "completedByName": { "type": "string", "maxLength": 100 },
+        "rejectedAt": { "type": "string", "format": "date-time" },
+        "rejectedBy": { "type": "string", "maxLength": 128 },
+        "rejectedByName": { "type": "string", "maxLength": 100 },
+        "rejectionReason": { "type": "string", "maxLength": 2000 },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "deleted": { "type": "boolean" },
+        "deletedAt": { "type": "string", "format": "date-time" },
+        "deletedBy": { "type": "string", "maxLength": 128 },
+        "revisions": { "type": "array" },
+        "currentRevision": { "type": "number" },
+        "latestChangesDetails": { "type": "string", "maxLength": 4000 }
+      },
+      "required": ["requestId", "source", "salesRepresentativeId", "designerId", "status", "priority", "createdAt", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User in-app notification",
+      "type": "object",
+      "properties": {
+        "notificationId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 150 },
+        "message": { "type": "string", "maxLength": 1000 },
+        "type": { "type": "string", "enum": ["REQUEST_ASSIGNED", "REQUEST_COMPLETED", "REQUEST_REJECTED", "REQUEST_RESUBMITTED", "SYSTEM_ALERT"] },
+        "requestId": { "type": "string", "maxLength": 64 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["notificationId", "userId", "title", "message", "type", "read", "createdAt"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System audit log record",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "maxLength": 128 },
+        "action": { "type": "string", "maxLength": 100 },
+        "performedBy": { "type": "string", "maxLength": 128 },
+        "performedByName": { "type": "string", "maxLength": 100 },
+        "performedByRole": { "type": "string", "maxLength": 50 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "targetType": { "type": "string", "maxLength": 50 },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "previousValue": { "type": "string", "maxLength": 2000 },
+        "newValue": { "type": "string", "maxLength": 2000 }
+      },
+      "required": ["logId", "action", "performedBy", "timestamp"]
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Global company settings and brand configuration",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string", "maxLength": 100 },
+        "applicationName": { "type": "string", "maxLength": 100 },
+        "timezone": { "type": "string", "maxLength": 50 },
+        "dateFormat": { "type": "string", "maxLength": 30 },
+        "logo": { "type": "string", "maxLength": 500000 },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "updatedBy": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["companyName", "applicationName", "timezone", "dateFormat", "updatedAt"]
+    },
+    "Counter": {
+      "title": "Counter",
+      "description": "Sequential ID generator counter document",
+      "type": "object",
+      "properties": {
+        "lastCount": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["lastCount"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles indexed by UID"
+    },
+    "/mockupRequests/{requestId}": {
+      "schema": "MockupRequest",
+      "description": "Mockup requests created by sales and worked on by designers"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "In-app notifications sent to specific users"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Append-only immutable audit trail"
+    },
+    "/companySettings/{settingId}": {
+      "schema": "CompanySettings",
+      "description": "Company configuration and branding settings"
+    },
+    "/counters/{counterId}": {
+      "schema": "Counter",
+      "description": "Sequential counters for unique ID generation"
+    }
+  }
+}

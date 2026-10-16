@@ -1,0 +1,47 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
+    // Mockup Requests Collection
+    match /mockupRequests/{reqDocId} {
+      allow read, write: if true;
+    }
+
+    // In-app Notifications
+    match /notifications/{notificationId} {
+      allow read, write: if true;
+    }
+
+    // Audit Logs (append-only immutable log)
+    match /auditLogs/{logId} {
+      allow read, create: if true;
+      allow update, delete: if false;
+    }
+
+    // Company Settings
+    match /companySettings/{settingId} {
+      allow read, write: if true;
+    }
+
+    // Counters (Used for atomic sequential Request ID generation)
+    match /counters/{counterId} {
+      allow read, write: if true;
+    }
+  }
+}

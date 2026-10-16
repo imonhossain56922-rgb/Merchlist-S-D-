@@ -1,0 +1,6 @@
+{
+  "name": "Marchlist Mockup Request",
+  "description": "Internal company system for Merchlist managing mockup and design requests between Sales Representatives and Designers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

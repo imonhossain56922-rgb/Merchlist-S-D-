@@ -1,0 +1,778 @@
+import React, { useState } from 'react';
+import { MockupRequest, UserProfile } from '../../types';
+import { PriorityBadge, StatusBadge, SourceBadge, RevisionBadge } from '../common/Badges';
+import {
+  completeMockupRequest,
+  rejectMockupRequest,
+  resubmitMockupRequest,
+  reopenMockupRequest,
+  softDeleteMockupRequest,
+  requestMockupRevision,
+} from '../../services/requestService';
+import { formatDateInTimezone, formatWaitingTime } from '../../utils/dateUtils';
+import {
+  X,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  ExternalLink,
+  Paperclip,
+  RotateCcw,
+  Trash2,
+  Calendar,
+  User,
+  AlertTriangle,
+  FileEdit,
+  Send,
+} from 'lucide-react';
+
+interface RequestDetailsModalProps {
+  request: MockupRequest | null;
+  currentUser: UserProfile;
+  timezone?: string;
+  isOpen: boolean;
+  onClose: () => void;
+  onUpdate: () => void;
+  initialOpenRevisionModal?: boolean;
+}
+
+export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
+  request,
+  currentUser,
+  timezone,
+  isOpen,
+  onClose,
+  onUpdate,
+  initialOpenRevisionModal = false,
+}) => {
+  const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
+  const [showRejectModal, setShowRejectModal] = useState(false);
+  const [showRevisionModal, setShowRevisionModal] = useState(initialOpenRevisionModal);
+  const [changesDetails, setChangesDetails] = useState('');
+  const [rejectionReason, setRejectionReason] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Resubmit edit states for Sales Representative
+  const [isResubmitting, setIsResubmitting] = useState(false);
+  const [editNotes, setEditNotes] = useState('');
+  const [editTitle, setEditTitle] = useState('');
+  const [editItem, setEditItem] = useState('');
+
+  React.useEffect(() => {
+    if (initialOpenRevisionModal) {
+      setShowRevisionModal(true);
+    }
+  }, [initialOpenRevisionModal, request?.id]);
+
+  if (!isOpen || !request) return null;
+
+  const isDesigner = currentUser.role === 'DESIGNER' && request.designerId === currentUser.userId;
+  const isSalesOwner =
+    (currentUser.role === 'SALES_REPRESENTATIVE' &&
+      request.salesRepresentativeId === currentUser.userId) ||
+    currentUser.role === 'HEAD_OF_SALES' ||
+    currentUser.role === 'ADMIN';
+  const isAdmin = currentUser.role === 'ADMIN';
+
+  const handleComplete = async () => {
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await completeMockupRequest({
+        request,
+        designerId: currentUser.userId,
+        designerName: currentUser.name,
+        timezone,
+      });
+      setShowCompleteConfirm(false);
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to complete request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReject = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!rejectionReason.trim()) {
+      setErrorMessage('Please provide a reason for rejecting this request.');
+      return;
+    }
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await rejectMockupRequest({
+        request,
+        designerId: currentUser.userId,
+        designerName: currentUser.name,
+        rejectionReason: rejectionReason.trim(),
+      });
+      setShowRejectModal(false);
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to reject request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editNotes.trim()) {
+      setErrorMessage('Notes / Instructions are required.');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await resubmitMockupRequest({
+        request,
+        salesRepresentativeId: currentUser.userId,
+        salesRepresentativeName: currentUser.name,
+        updatedFields: {
+          notes: editNotes.trim(),
+          ...(request.source !== 'gallabox'
+            ? {
+                mockupTitle: editTitle.trim() || request.mockupTitle,
+                itemName: editItem.trim() || request.itemName,
+              }
+            : {}),
+        },
+      });
+      setIsResubmitting(false);
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to resubmit request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReopen = async () => {
+    if (!confirm('Are you sure you want to reopen this completed mockup request?')) return;
+    setIsSubmitting(true);
+    try {
+      await reopenMockupRequest({
+        request,
+        adminId: currentUser.userId,
+        adminName: currentUser.name,
+      });
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to reopen request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSoftDelete = async () => {
+    if (!confirm('Are you sure you want to soft delete this mockup request? Historical logs and counters will be preserved.')) {
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await softDeleteMockupRequest({
+        requestId: request.id,
+        adminId: currentUser.userId,
+        adminName: currentUser.name,
+      });
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to delete request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRevisionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!changesDetails.trim()) {
+      setErrorMessage('Please enter Changes Details.');
+      return;
+    }
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await requestMockupRevision({
+        request,
+        salesRepresentativeId: currentUser.userId,
+        salesRepresentativeName: currentUser.name,
+        changesDetails: changesDetails.trim(),
+        timezone,
+      });
+      setShowRevisionModal(false);
+      setChangesDetails('');
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to submit revision request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+      <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs" onClick={onClose} />
+
+      <div className="relative bg-white rounded-2xl max-w-3xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-slate-200 z-10 animate-in fade-in zoom-in-95 duration-150">
+        {/* Header */}
+        <div className="px-6 py-4 bg-[#0c192c] rounded-t-2xl flex items-center justify-between text-white">
+          <div className="flex items-center gap-3">
+            <span className="font-mono font-extrabold text-lg text-cyan-300 tracking-wider">
+              {request.requestId}
+            </span>
+            {request.currentRevision && request.currentRevision > 0 && (
+              <RevisionBadge revisionNumber={request.currentRevision} />
+            )}
+            <PriorityBadge priority={request.priority} />
+            <StatusBadge status={request.status} />
+            <SourceBadge source={request.source} />
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-6 overflow-y-auto flex-1 space-y-6 custom-scrollbar text-xs">
+          {errorMessage && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-2.5 text-xs text-rose-800">
+              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          {/* Active Revision Banner if request is currently in revision and pending */}
+          {request.status === 'PENDING' && request.currentRevision && request.currentRevision > 0 && (
+            <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 shadow-2xs">
+              <div className="flex items-start gap-3">
+                <FileEdit className="w-5 h-5 text-purple-700 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-purple-950 text-sm">
+                      Revision #{request.currentRevision} in Progress
+                    </h4>
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-purple-600 text-white">
+                      Active
+                    </span>
+                  </div>
+                  <div className="mt-1.5 p-2.5 bg-white rounded-lg border border-purple-200 text-slate-900 font-medium whitespace-pre-wrap leading-relaxed">
+                    <span className="font-bold text-purple-900 block text-[11px] mb-0.5">
+                      Changes Details:
+                    </span>
+                    {request.latestChangesDetails}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Rejection Alert Banner if rejected */}
+          {request.status === 'REJECTED' && (
+            <div className="p-4 rounded-xl bg-rose-50 border border-rose-200">
+              <div className="flex items-start gap-2.5">
+                <XCircle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <h4 className="font-bold text-rose-900 text-sm">Request Rejected by Designer</h4>
+                  <p className="text-rose-700 mt-1">
+                    <span className="font-semibold">Reason:</span> {request.rejectionReason}
+                  </p>
+                  <p className="text-[11px] text-rose-600 mt-1">
+                    Rejected on {formatDateInTimezone(request.rejectedAt, timezone)} by {request.rejectedByName}
+                  </p>
+
+                  {isSalesOwner && !isResubmitting && (
+                    <button
+                      onClick={() => {
+                        setEditNotes(request.notes);
+                        setEditTitle(request.mockupTitle || '');
+                        setEditItem(request.itemName || '');
+                        setIsResubmitting(true);
+                      }}
+                      className="mt-3 px-3.5 py-1.5 rounded-lg bg-rose-600 text-white font-semibold hover:bg-rose-700 transition-colors shadow-xs"
+                    >
+                      Correct & Resubmit Request
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Resubmission Form (if sales rep clicked resubmit) */}
+          {isResubmitting && (
+            <form onSubmit={handleResubmit} className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-3">
+              <h4 className="font-bold text-slate-800 text-sm">Update and Resubmit Request</h4>
+              {request.source !== 'gallabox' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Mockup Title</label>
+                    <input
+                      type="text"
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded border border-slate-300 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Item / Product Name</label>
+                    <input
+                      type="text"
+                      value={editItem}
+                      onChange={(e) => setEditItem(e.target.value)}
+                      className="w-full px-3 py-1.5 rounded border border-slate-300 text-xs"
+                    />
+                  </div>
+                </div>
+              )}
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Corrected Notes / Instructions <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  required
+                  className="w-full px-3 py-1.5 rounded border border-slate-300 text-xs"
+                />
+              </div>
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setIsResubmitting(false)}
+                  className="px-3 py-1.5 border border-slate-300 rounded font-semibold text-slate-700 hover:bg-slate-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-1.5 bg-[#0c192c] text-white rounded font-semibold hover:bg-slate-800 shadow-xs"
+                >
+                  {isSubmitting ? 'Resubmitting...' : 'Confirm Resubmission'}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Primary Request Specs */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
+            <div>
+              <span className="text-slate-500 font-medium block">Mockup Title</span>
+              <span className="text-slate-900 font-bold text-sm">
+                {request.mockupTitle || (request.source === 'gallabox' ? 'Gallabox Request' : 'Not specified')}
+              </span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Item / Product Name</span>
+              <span className="text-slate-900 font-bold text-sm">
+                {request.itemName || (request.source === 'gallabox' ? 'Not Applicable' : 'Not specified')}
+              </span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Sales Representative</span>
+              <span className="text-slate-900 font-semibold">{request.salesRepresentativeName}</span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Assigned Designer</span>
+              <span className="text-slate-900 font-semibold">{request.designerName}</span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Client Name</span>
+              <span className="text-slate-900 font-semibold">{request.clientName || '-'}</span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Client Mobile Number</span>
+              <span className="text-slate-900 font-semibold">{request.clientMobileNumber || '-'}</span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Contact By</span>
+              <span className="text-slate-900 font-semibold">{request.contactBy || '-'}</span>
+            </div>
+
+            <div>
+              <span className="text-slate-500 font-medium block">Waiting Time</span>
+              <span className="text-slate-900 font-semibold">
+                {request.status === 'COMPLETED'
+                  ? formatWaitingTime(request.createdAt, request.completedAt)
+                  : formatWaitingTime(request.createdAt)}
+              </span>
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div>
+            <h4 className="font-bold text-slate-800 text-xs mb-1.5 uppercase tracking-wider">
+              Notes / Instructions
+            </h4>
+            <div className="p-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs">
+              {request.notes}
+            </div>
+          </div>
+
+          {/* Reference Links */}
+          {(request.referenceLinks || request.additionalLinks) && (
+            <div className="space-y-2">
+              <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Reference Links</h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {request.referenceLinks && (
+                  <a
+                    href={request.referenceLinks}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between hover:bg-slate-50 text-cyan-700 font-medium"
+                  >
+                    <span className="truncate max-w-[240px]">{request.referenceLinks}</span>
+                    <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
+                  </a>
+                )}
+                {request.additionalLinks && (
+                  <a
+                    href={request.additionalLinks}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between hover:bg-slate-50 text-cyan-700 font-medium"
+                  >
+                    <span className="truncate max-w-[240px]">{request.additionalLinks}</span>
+                    <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Attachments */}
+          {request.attachments && request.attachments.length > 0 && (
+            <div>
+              <h4 className="font-bold text-slate-800 text-xs mb-2 uppercase tracking-wider">
+                Attachments ({request.attachments.length})
+              </h4>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {request.attachments.map((att) => (
+                  <a
+                    key={att.id}
+                    href={att.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center gap-2 hover:bg-slate-50 text-slate-700"
+                  >
+                    <Paperclip className="w-4 h-4 text-slate-400" />
+                    <span className="truncate flex-1 font-medium">{att.name}</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Revision History Table */}
+          {request.revisions && request.revisions.length > 0 && (
+            <div>
+              <h4 className="font-bold text-slate-800 text-xs mb-3 uppercase tracking-wider flex items-center gap-2">
+                <FileEdit className="w-4 h-4 text-purple-600" />
+                Revision History ({request.revisions.length})
+              </h4>
+              <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-2xs">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-600 font-semibold text-[10px] uppercase tracking-wider">
+                      <th className="py-2.5 px-3">Revision</th>
+                      <th className="py-2.5 px-3">Changes Details</th>
+                      <th className="py-2.5 px-3">Requested At</th>
+                      <th className="py-2.5 px-3">Requested By</th>
+                      <th className="py-2.5 px-3">Completed At</th>
+                      <th className="py-2.5 px-3">Completed By</th>
+                      <th className="py-2.5 px-3">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {request.revisions.map((rev) => (
+                      <tr key={rev.revisionNumber} className="hover:bg-slate-50/60">
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          <span className="font-bold font-mono text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                            Rev #{rev.revisionNumber}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-800 max-w-[220px] whitespace-pre-wrap font-medium">
+                          {rev.changesDetails}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-500 whitespace-nowrap">
+                          {formatDateInTimezone(rev.requestedAt, timezone, true)}
+                        </td>
+                        <td className="py-2.5 px-3 font-medium text-slate-700 whitespace-nowrap">
+                          {rev.requestedByName}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-500 whitespace-nowrap">
+                          {rev.completedAt ? (
+                            formatDateInTimezone(rev.completedAt, timezone, true)
+                          ) : (
+                            <span className="text-amber-600 font-medium">In Progress</span>
+                          )}
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-700 whitespace-nowrap">
+                          {rev.completedByName || '-'}
+                        </td>
+                        <td className="py-2.5 px-3 whitespace-nowrap">
+                          {rev.completedAt ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Completed
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                              <Clock className="w-3 h-3" />
+                              Active Queue
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Complete Lifecycle Timeline */}
+          <div>
+            <h4 className="font-bold text-slate-800 text-xs mb-3 uppercase tracking-wider">
+              Request Timeline
+            </h4>
+            <div className="space-y-3 relative before:absolute before:inset-0 before:left-3 before:w-0.5 before:bg-slate-200 pl-7">
+              {request.timeline && request.timeline.length > 0 ? (
+                request.timeline.map((evt, idx) => (
+                  <div key={idx} className="relative">
+                    <span className="absolute -left-7 top-1 w-2.5 h-2.5 rounded-full bg-cyan-600 ring-4 ring-white" />
+                    <div className="flex items-baseline justify-between">
+                      <span className="font-bold text-slate-900">{evt.action}</span>
+                      <span className="text-[10px] text-slate-400">
+                        {formatDateInTimezone(evt.timestamp, timezone, true)}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600">
+                      By {evt.performedByName} {evt.note ? `— ${evt.note}` : ''}
+                    </p>
+                  </div>
+                ))
+              ) : (
+                <div className="text-slate-500">
+                  Created {formatDateInTimezone(request.createdAt, timezone, true)} by{' '}
+                  {request.salesRepresentativeName}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer Actions */}
+        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 rounded-b-2xl flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            {isAdmin && (
+              <>
+                {request.status === 'COMPLETED' && (
+                  <button
+                    onClick={handleReopen}
+                    disabled={isSubmitting}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100 text-xs flex items-center gap-1.5"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reopen
+                  </button>
+                )}
+                <button
+                  onClick={handleSoftDelete}
+                  disabled={isSubmitting}
+                  className="px-3 py-1.5 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold text-xs flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Soft Delete
+                </button>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            {/* Sales Representative Action: Revision Request on Completed Order */}
+            {request.status === 'COMPLETED' && (isSalesOwner || isAdmin) && (
+              <button
+                onClick={() => setShowRevisionModal(true)}
+                disabled={isSubmitting}
+                className="px-4 py-2 rounded-xl bg-purple-600 text-white font-semibold hover:bg-purple-700 text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+              >
+                <FileEdit className="w-4 h-4" />
+                Revision Request
+              </button>
+            )}
+
+            {/* Designer Actions for Pending Requests */}
+            {isDesigner && request.status === 'PENDING' && (
+              <>
+                <button
+                  onClick={() => setShowRejectModal(true)}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl border border-rose-300 text-rose-700 font-semibold hover:bg-rose-50 text-xs flex items-center gap-1.5 transition-colors"
+                >
+                  <XCircle className="w-4 h-4" />
+                  Reject Request
+                </button>
+                <button
+                  onClick={() => setShowCompleteConfirm(true)}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-700 text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Mark as Complete
+                </button>
+              </>
+            )}
+
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100 text-xs transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Dialog: Revision Request with "Changes Details" single input */}
+      {showRevisionModal && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
+              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <FileEdit className="w-4 h-4 text-purple-600" />
+                Revision Request — {request.requestId}
+              </h4>
+              <button
+                type="button"
+                onClick={() => setShowRevisionModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              Describe the modifications or adjustments required for this design. The request ID will remain unchanged and will be returned to the Designer&apos;s active queue.
+            </p>
+            <form onSubmit={handleRevisionSubmit}>
+              <div className="mb-4">
+                <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                  Changes Details <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  value={changesDetails}
+                  onChange={(e) => setChangesDetails(e.target.value)}
+                  required
+                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowRevisionModal(false)}
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-lg bg-purple-600 text-white text-xs font-semibold hover:bg-purple-700 shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {isSubmitting ? 'Sending...' : 'Send Revision Request'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Dialog: Complete Request */}
+      {showCompleteConfirm && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95">
+            <h4 className="text-sm font-bold text-slate-900 mb-2">Complete Mockup Request</h4>
+            <p className="text-xs text-slate-600 mb-5 leading-relaxed">
+              Are you sure you want to mark this mockup as completed? This will notify the Sales Representative and record your completion timestamp.
+            </p>
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowCompleteConfirm(false)}
+                className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleComplete}
+                disabled={isSubmitting}
+                className="px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 shadow-sm"
+              >
+                {isSubmitting ? 'Completing...' : 'Mark as Complete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog: Reject Request with Required Reason */}
+      {showRejectModal && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95">
+            <h4 className="text-sm font-bold text-slate-900 mb-1">Reject Mockup Request</h4>
+            <p className="text-xs text-slate-500 mb-4">
+              Why are you rejecting this request?
+            </p>
+            <form onSubmit={handleReject}>
+              <textarea
+                rows={4}
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                required
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-rose-500 mb-4"
+              />
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowRejectModal(false)}
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 shadow-sm disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Rejecting...' : 'Reject Request'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
