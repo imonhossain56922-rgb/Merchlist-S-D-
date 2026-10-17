@@ -284,6 +284,7 @@ export async function createSystemUser(
     active: boolean;
     assignedDesignerId?: string;
     assignedDesignerName?: string;
+    avatarUrl?: string | null;
   }
 ): Promise<UserProfile> {
   if (creator.role !== 'ADMIN') {

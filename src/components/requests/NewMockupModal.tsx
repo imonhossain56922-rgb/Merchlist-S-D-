@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, RequestSource, RequestPriority, DesignerCapacity } from '../../types';
 import { createMockupRequest, getDesignerCapacity } from '../../services/requestService';
-import { X, Upload, AlertCircle, Zap, Clock, ShieldAlert, Check } from 'lucide-react';
+import { X, Upload, AlertCircle, Zap, Clock, ShieldAlert, Check, Palette } from 'lucide-react';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 
 interface NewMockupModalProps {
   currentUser: UserProfile;
+  allUsers?: UserProfile[];
   timezone?: string;
   isOpen: boolean;
   onClose: () => void;
@@ -13,6 +16,7 @@ interface NewMockupModalProps {
 
 export const NewMockupModal: React.FC<NewMockupModalProps> = ({
   currentUser,
+  allUsers = [],
   timezone,
   isOpen,
   onClose,
@@ -30,18 +34,57 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
   const [additionalLinks, setAdditionalLinks] = useState('');
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; url: string; size: number; type: string; uploadedAt: string }>>([]);
 
+  const [availableDesigners, setAvailableDesigners] = useState<UserProfile[]>([]);
+
+  // Keep available designers updated from allUsers or fetch from Firestore if empty
+  useEffect(() => {
+    const fromProps = allUsers.filter((u) => u.role === 'DESIGNER' && u.active && !u.deleted);
+    if (fromProps.length > 0) {
+      setAvailableDesigners(fromProps);
+    } else if (isOpen) {
+      // Direct query fallback to ensure designers are always loaded
+      getDocs(query(collection(db, 'users'), where('role', '==', 'DESIGNER')))
+        .then((snap) => {
+          const list = snap.docs
+            .map((d) => d.data() as UserProfile)
+            .filter((u) => u.active && !u.deleted);
+          setAvailableDesigners(list);
+        })
+        .catch((err) => console.warn('Failed to load designers in modal:', err));
+    }
+  }, [allUsers, isOpen]);
+
+  const [selectedDesignerId, setSelectedDesignerId] = useState<string>(() => {
+    return currentUser.assignedDesignerId || '';
+  });
+
+  // Automatically select assigned designer or first available designer
+  useEffect(() => {
+    if (!selectedDesignerId || !availableDesigners.some((d) => d.userId === selectedDesignerId)) {
+      if (currentUser.assignedDesignerId && availableDesigners.some((d) => d.userId === currentUser.assignedDesignerId)) {
+        setSelectedDesignerId(currentUser.assignedDesignerId);
+      } else if (availableDesigners.length > 0) {
+        setSelectedDesignerId(availableDesigners[0].userId);
+      }
+    }
+  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId]);
+
+  const selectedDesigner = availableDesigners.find((d) => d.userId === selectedDesignerId) ||
+    allUsers.find((u) => u.userId === selectedDesignerId);
+
   const [capacity, setCapacity] = useState<DesignerCapacity | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Load Designer capacity
   useEffect(() => {
-    if (currentUser.assignedDesignerId) {
-      getDesignerCapacity(currentUser.assignedDesignerId, currentUser.assignedDesignerName).then((cap) => {
+    const designerId = selectedDesignerId || currentUser.assignedDesignerId;
+    if (designerId) {
+      getDesignerCapacity(designerId, selectedDesigner?.name || currentUser.assignedDesignerName).then((cap) => {
         setCapacity(cap);
       });
     }
-  }, [currentUser.assignedDesignerId, currentUser.assignedDesignerName, isOpen]);
+  }, [selectedDesignerId, currentUser.assignedDesignerId, selectedDesigner?.name, isOpen]);
 
   if (!isOpen) return null;
 
@@ -84,8 +127,11 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     e.preventDefault();
     setErrorMessage(null);
 
-    if (!currentUser.assignedDesignerId) {
-      setErrorMessage('You do not have an assigned Designer. Please contact Admin.');
+    const designerIdToUse = selectedDesignerId || currentUser.assignedDesignerId;
+    const designerNameToUse = selectedDesigner?.name || currentUser.assignedDesignerName || 'Assigned Designer';
+
+    if (!designerIdToUse) {
+      setErrorMessage('Please select a Designer for this mockup request.');
       return;
     }
 
@@ -108,14 +154,14 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     // Capacity check
     if (priority === 'SUPER_URGENT' && capacity && !capacity.canAcceptSuperUrgent) {
       setErrorMessage(
-        'Your assigned Designer currently has an active Super Urgent request. Please wait until it is completed before submitting another Super Urgent request.'
+        'The assigned Designer currently has an active Super Urgent request. Please wait until it is completed or use another priority.'
       );
       return;
     }
 
     if (priority === 'URGENT' && capacity && !capacity.canAcceptUrgent) {
       setErrorMessage(
-        'Your assigned Designer currently has the maximum number of active Urgent requests. Please wait until an Urgent request is completed or use Regular priority.'
+        'The assigned Designer currently has the maximum number of active Urgent requests. Please wait until an Urgent request is completed or use Regular priority.'
       );
       return;
     }
@@ -136,8 +182,8 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
         attachments,
         salesRepresentativeId: currentUser.userId,
         salesRepresentativeName: currentUser.name,
-        designerId: currentUser.assignedDesignerId,
-        designerName: currentUser.assignedDesignerName || 'Assigned Designer',
+        designerId: designerIdToUse,
+        designerName: designerNameToUse,
         timezone,
       });
 
@@ -160,7 +206,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
           <div>
             <h3 className="text-base font-bold tracking-tight">New Mockup Request</h3>
             <p className="text-xs text-cyan-300">
-              Assigned to: <span className="font-semibold text-white">{currentUser.assignedDesignerName || 'No Designer Assigned'}</span>
+              Assigned to: <span className="font-semibold text-white">{selectedDesigner?.name || currentUser.assignedDesignerName || 'Auto-assigning Designer'}</span>
             </p>
           </div>
           <button
@@ -179,6 +225,35 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
               <span>{errorMessage}</span>
             </div>
           )}
+
+          {/* Designer Selection */}
+          <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Palette className="w-3.5 h-3.5 text-cyan-700" />
+                <span>Assigned Designer</span>
+                <span className="text-rose-500">*</span>
+              </label>
+              {selectedDesigner && (
+                <span className="text-[10px] text-slate-500 font-mono">
+                  ID: {selectedDesigner.loginId}
+                </span>
+              )}
+            </div>
+            <select
+              value={selectedDesignerId}
+              onChange={(e) => setSelectedDesignerId(e.target.value)}
+              required
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 text-xs font-medium focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+            >
+              <option value="">-- Select Designer --</option>
+              {availableDesigners.map((d) => (
+                <option key={d.userId} value={d.userId}>
+                  {d.name} (ID: {d.loginId})
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Designer Capacity Widget */}
           {capacity && (

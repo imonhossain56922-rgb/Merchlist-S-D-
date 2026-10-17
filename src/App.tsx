@@ -19,6 +19,7 @@ import { DesignerDashboard } from './components/dashboard/DesignerDashboard';
 import { HeadOfSalesDashboard } from './components/dashboard/HeadOfSalesDashboard';
 import { AdminDashboard } from './components/dashboard/AdminDashboard';
 import { NewMockupModal } from './components/requests/NewMockupModal';
+import { NewMockupView } from './components/requests/NewMockupView';
 import { RequestDetailsModal } from './components/requests/RequestDetailsModal';
 import { RevisionModal } from './components/requests/RevisionModal';
 import { RequestList } from './components/requests/RequestList';
@@ -30,6 +31,7 @@ import { UserProfileView } from './components/profile/UserProfileView';
 import { NotificationPanel } from './components/notifications/NotificationPanel';
 import { MerchlistLogo } from './components/brand/MerchlistLogo';
 import { completeMockupRequest } from './services/requestService';
+import { Plus } from 'lucide-react';
 
 export default function App() {
   // Persistent session: Initialize directly from device storage so the user is never logged out automatically
@@ -206,29 +208,28 @@ export default function App() {
       return;
     }
 
-    let q = query(collection(db, 'mockupRequests'), where('deleted', '==', false));
+    let q = query(collection(db, 'mockupRequests'));
 
-    // Data Isolation by Role:
-    // Sales Reps can only query where salesRepresentativeId == currentUser.userId
-    // Designers can only query where designerId == currentUser.userId
+    // Data Isolation by Role (Single equality condition to prevent composite index errors):
     if (currentUser.role === 'SALES_REPRESENTATIVE') {
       q = query(
         collection(db, 'mockupRequests'),
-        where('salesRepresentativeId', '==', currentUser.userId),
-        where('deleted', '==', false)
+        where('salesRepresentativeId', '==', currentUser.userId)
       );
     } else if (currentUser.role === 'DESIGNER') {
       q = query(
         collection(db, 'mockupRequests'),
-        where('designerId', '==', currentUser.userId),
-        where('deleted', '==', false)
+        where('designerId', '==', currentUser.userId)
       );
     }
 
     const unsub = onSnapshot(
       q,
       (snapshot) => {
-        const reqList = snapshot.docs.map((d) => d.data() as MockupRequest);
+        // Filter out deleted items in memory (compatible with all legacy documents)
+        const reqList = snapshot.docs
+          .map((d) => d.data() as MockupRequest)
+          .filter((r) => r && !r.deleted);
         // Sort descending by created date
         reqList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
         setRequests(reqList);
@@ -399,11 +400,19 @@ export default function App() {
       }
     }
 
-    // 2. Sales Representative: New Mockup tab
+    // 2. Dedicated New Mockup Request Page
     if (currentTab === 'new_mockup') {
-      setIsNewMockupOpen(true);
-      setCurrentTab('dashboard');
-      return null;
+      return (
+        <NewMockupView
+          currentUser={currentUser}
+          allUsers={allUsers}
+          timezone={settings.timezone}
+          onComplete={() => {
+            setCurrentTab(currentUser.role === 'SALES_REPRESENTATIVE' ? 'my_requests' : 'mockup_requests');
+          }}
+          onCancel={() => setCurrentTab('dashboard')}
+        />
+      );
     }
 
     // 3. User Management Tabs (Admin Only)
@@ -484,15 +493,33 @@ export default function App() {
     if (
       currentTab === 'my_requests' ||
       currentTab === 'all_requests' ||
-      currentTab === 'mockup_requests'
+      currentTab === 'mockup_requests' ||
+      currentTab === 'mockup_request'
     ) {
       return (
         <div className="space-y-4">
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between">
-            <h2 className="text-xl font-bold text-[#0c192c] tracking-tight">All Mockup Requests</h2>
-            <span className="text-xs font-semibold text-slate-500">
-              Total: {requests.length}
-            </span>
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-[#0c192c] tracking-tight">Mockup Requests</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Manage and track client specifications, design status, and revision history.
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-semibold text-slate-600 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                Total: {requests.length}
+              </span>
+              {(currentUser.role === 'SALES_REPRESENTATIVE' || currentUser.role === 'ADMIN' || currentUser.role === 'HEAD_OF_SALES') && (
+                <button
+                  type="button"
+                  onClick={() => setIsNewMockupOpen(true)}
+                  className="px-4 py-2 rounded-xl bg-[#0c192c] text-white text-xs font-semibold hover:bg-slate-800 transition-colors shadow-xs flex items-center gap-2 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>New Mockup Request</span>
+                </button>
+              )}
+            </div>
           </div>
           <RequestList
             requests={requests}
@@ -592,7 +619,16 @@ export default function App() {
 
     // 7. Profile Tab
     if (currentTab === 'profile') {
-      return <UserProfileView currentUser={currentUser} timezone={settings.timezone} />;
+      return (
+        <UserProfileView
+          currentUser={currentUser}
+          timezone={settings.timezone}
+          onUserUpdated={(updated) => {
+            setCurrentUser(updated);
+            refreshUsersList();
+          }}
+        />
+      );
     }
 
     // 8. Notifications Tab
@@ -626,6 +662,7 @@ export default function App() {
           applicationName={settings.applicationName}
           onOpenMobileMenu={() => setIsMobileNavOpen(true)}
           onOpenNotifications={() => setIsNotificationsOpen(true)}
+          onOpenProfile={() => setCurrentTab('profile')}
           unreadCount={unreadNotificationCount}
           assignedDesignerName={currentUser.assignedDesignerName}
         />
@@ -635,18 +672,17 @@ export default function App() {
         </main>
       </div>
 
-      {/* New Mockup Modal for Sales Representatives */}
-      {currentUser.role === 'SALES_REPRESENTATIVE' && (
-        <NewMockupModal
-          currentUser={currentUser}
-          timezone={settings.timezone}
-          isOpen={isNewMockupOpen}
-          onClose={() => setIsNewMockupOpen(false)}
-          onSuccess={() => {
-            // Success handler
-          }}
-        />
-      )}
+      {/* New Mockup Modal (Opens from quick action buttons) */}
+      <NewMockupModal
+        currentUser={currentUser}
+        allUsers={allUsers}
+        timezone={settings.timezone}
+        isOpen={isNewMockupOpen}
+        onClose={() => setIsNewMockupOpen(false)}
+        onSuccess={() => {
+          setIsNewMockupOpen(false);
+        }}
+      />
 
       {/* Request Details & Action Modal */}
       <RequestDetailsModal

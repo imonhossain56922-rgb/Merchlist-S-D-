@@ -16,6 +16,7 @@ import {
   RequestPriority,
   RequestSource,
   DesignerCapacity,
+  UserProfile,
 } from '../types';
 import { logAuditEvent } from './auditService';
 import { createNotification } from './notificationService';
@@ -29,7 +30,7 @@ export async function getNextRequestId(): Promise<string> {
       const counterSnap = await transaction.get(COUNTER_DOC_REF);
       let count = 1;
       if (counterSnap.exists()) {
-        count = (counterSnap.data().lastCount || 0) + 1;
+        count = (counterSnap.data()?.lastCount || 0) + 1;
       }
       transaction.set(
         COUNTER_DOC_REF,
@@ -43,18 +44,29 @@ export async function getNextRequestId(): Promise<string> {
     });
     return nextId;
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, 'counters/mockupRequests');
-    throw error;
+    console.warn('Transaction on counter failed, falling back to direct setDoc:', error);
+    try {
+      const counterSnap = await getDoc(COUNTER_DOC_REF);
+      let count = 1;
+      if (counterSnap.exists()) {
+        count = (counterSnap.data()?.lastCount || 0) + 1;
+      }
+      await setDoc(COUNTER_DOC_REF, { lastCount: count, updatedAt: new Date().toISOString() }, { merge: true });
+      return `M${String(count).padStart(6, '0')}`;
+    } catch {
+      // Safe fallback to timestamp-based sequential ID
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+      return `M${Date.now().toString().slice(-6)}`;
+    }
   }
 }
 
 export async function getDesignerCapacity(designerId: string, designerName = ''): Promise<DesignerCapacity> {
   try {
+    // Query by designerId only to prevent composite index requirement in Firestore
     const q = query(
       collection(db, 'mockupRequests'),
-      where('designerId', '==', designerId),
-      where('status', '==', 'PENDING'),
-      where('deleted', '==', false)
+      where('designerId', '==', designerId)
     );
     const snap = await getDocs(q);
 
@@ -64,6 +76,9 @@ export async function getDesignerCapacity(designerId: string, designerName = '')
 
     snap.forEach((docSnap) => {
       const data = docSnap.data() as MockupRequest;
+      if (data.deleted) return;
+      if (data.status !== 'PENDING') return;
+
       if (data.priority === 'SUPER_URGENT') superUrgentCount++;
       else if (data.priority === 'URGENT') urgentCount++;
       else regularCount++;
@@ -81,7 +96,7 @@ export async function getDesignerCapacity(designerId: string, designerName = '')
       canAcceptUrgent: urgentCount < 2,
     };
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'mockupRequests');
+    console.warn('getDesignerCapacity error:', error);
     return {
       designerId,
       designerName,
@@ -114,24 +129,42 @@ export async function createMockupRequest(params: {
   priority: RequestPriority;
   timezone?: string;
 }): Promise<MockupRequest> {
-  // Validate designer assignment
-  if (!params.designerId) {
-    throw new Error('Your user profile does not have an assigned Designer. Please contact Admin.');
+  let targetDesignerId = params.designerId;
+  let targetDesignerName = params.designerName;
+
+  // Validate or auto-fallback designer assignment
+  if (!targetDesignerId) {
+    try {
+      const snap = await getDocs(query(collection(db, 'users'), where('role', '==', 'DESIGNER')));
+      const activeDesigners = snap.docs
+        .map((d) => d.data() as UserProfile)
+        .filter((u) => u.active && !u.deleted);
+      if (activeDesigners.length > 0) {
+        targetDesignerId = activeDesigners[0].userId;
+        targetDesignerName = activeDesigners[0].name;
+      }
+    } catch (err) {
+      console.warn('Fallback designer lookup failed:', err);
+    }
+  }
+
+  if (!targetDesignerId) {
+    throw new Error('No active Designer found in the system. Please ensure an active Designer exists.');
   }
 
   // Atomically check priority capacity and allocate ID
   try {
-    const capacity = await getDesignerCapacity(params.designerId, params.designerName);
+    const capacity = await getDesignerCapacity(targetDesignerId, targetDesignerName);
 
     if (params.priority === 'SUPER_URGENT' && !capacity.canAcceptSuperUrgent) {
       throw new Error(
-        'Your assigned Designer currently has an active Super Urgent request. Please wait until it is completed before submitting another Super Urgent request.'
+        'The assigned Designer currently has an active Super Urgent request. Please wait until it is completed before submitting another Super Urgent request.'
       );
     }
 
     if (params.priority === 'URGENT' && !capacity.canAcceptUrgent) {
       throw new Error(
-        'Your assigned Designer currently has the maximum number of active Urgent requests. Please wait until an Urgent request is completed or use Regular priority.'
+        'The assigned Designer currently has the maximum number of active Urgent requests. Please wait until an Urgent request is completed or use Regular priority.'
       );
     }
 
@@ -158,8 +191,8 @@ export async function createMockupRequest(params: {
       attachments: params.attachments || [],
       salesRepresentativeId: params.salesRepresentativeId,
       salesRepresentativeName: params.salesRepresentativeName,
-      designerId: params.designerId,
-      designerName: params.designerName,
+      designerId: targetDesignerId,
+      designerName: targetDesignerName,
       status: 'PENDING',
       priority: params.priority,
       createdAt: nowIso,
@@ -180,7 +213,7 @@ export async function createMockupRequest(params: {
           note: `Source: ${params.source.toUpperCase()} | Priority: ${params.priority}`,
         },
         {
-          action: `Assigned to ${params.designerName}`,
+          action: `Assigned to ${targetDesignerName}`,
           timestamp: nowIso,
           performedBy: 'SYSTEM',
           performedByName: 'Auto-Assignment',
@@ -192,7 +225,7 @@ export async function createMockupRequest(params: {
 
     // Notify Designer
     await createNotification({
-      userId: params.designerId,
+      userId: targetDesignerId,
       title: 'New Mockup Request Assigned',
       message: `${params.salesRepresentativeName} assigned request ${requestId} (${params.priority})`,
       type: 'REQUEST_ASSIGNED',

@@ -48,11 +48,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       case 'ADMIN':
         return [
           { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+          { id: 'new_mockup', label: 'New Mockup', icon: FilePlus2, highlight: true },
+          { id: 'mockup_requests', label: 'Mockup Requests', icon: FileText },
           { id: 'users', label: 'Users', icon: Users },
           { id: 'sales_reps', label: 'Sales Representatives', icon: UserCheck },
           { id: 'designers', label: 'Designers', icon: Palette },
           { id: 'head_of_sales', label: 'Head of Sales', icon: Briefcase },
-          { id: 'mockup_requests', label: 'Mockup Requests', icon: FileText },
           { id: 'reports', label: 'Reports', icon: FileSpreadsheet },
           { id: 'audit_logs', label: 'Audit Logs', icon: History },
           { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadCount },
@@ -63,9 +64,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       case 'HEAD_OF_SALES':
         return [
           { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+          { id: 'new_mockup', label: 'New Mockup', icon: FilePlus2, highlight: true },
+          { id: 'mockup_requests', label: 'Mockup Requests', icon: FileText },
           { id: 'sales_team', label: 'Sales Team', icon: UserCheck },
           { id: 'design_team', label: 'Design Team', icon: Palette },
-          { id: 'mockup_requests', label: 'Mockup Requests', icon: FileText },
           { id: 'reports', label: 'Reports', icon: FileSpreadsheet },
           { id: 'notifications', label: 'Notifications', icon: Bell, badge: unreadCount },
           { id: 'profile', label: 'Profile', icon: User },
@@ -75,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         return [
           { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
           { id: 'new_mockup', label: 'New Mockup', icon: FilePlus2, highlight: true },
-          { id: 'my_requests', label: 'My Requests', icon: FileText },
+          { id: 'mockup_requests', label: 'Mockup Requests', icon: FileText },
           { id: 'pending', label: 'Pending', icon: Clock },
           { id: 'rejected', label: 'Rejected', icon: XCircle },
           { id: 'completed', label: 'Completed', icon: CheckCircle2 },
@@ -130,7 +132,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto custom-scrollbar">
         {navItems.map((item) => {
           const Icon = item.icon;
-          const isActive = currentTab === item.id;
+          const isActive =
+            currentTab === item.id ||
+            (item.id === 'mockup_requests' && (currentTab === 'my_requests' || currentTab === 'mockup_requests'));
 
           return (
             <button

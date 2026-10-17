@@ -24,7 +24,11 @@ import {
   AlertTriangle,
   FileEdit,
   Send,
+  Copy,
+  Check,
 } from 'lucide-react';
+
+import { CopyButton } from '../common/CopyButton';
 
 interface RequestDetailsModalProps {
   request: MockupRequest | null;
@@ -227,9 +231,16 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
         {/* Header */}
         <div className="px-6 py-4 bg-[#0c192c] rounded-t-2xl flex items-center justify-between text-white">
           <div className="flex items-center gap-3">
-            <span className="font-mono font-extrabold text-lg text-cyan-300 tracking-wider">
-              {request.requestId}
-            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="font-mono font-extrabold text-lg text-cyan-300 tracking-wider">
+                {request.requestId}
+              </span>
+              <CopyButton
+                text={request.requestId}
+                compact
+                className="bg-slate-800 text-slate-200 border-slate-700 hover:bg-slate-700 hover:text-white"
+              />
+            </div>
             {request.currentRevision && request.currentRevision > 0 && (
               <RevisionBadge revisionNumber={request.currentRevision} />
             )}
@@ -368,63 +379,154 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
             </form>
           )}
 
-          {/* Primary Request Specs */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-50/70 p-4 rounded-xl border border-slate-200">
-            <div>
-              <span className="text-slate-500 font-medium block">Mockup Title</span>
-              <span className="text-slate-900 font-bold text-sm">
-                {request.mockupTitle || (request.source === 'gallabox' ? 'Gallabox Request' : 'Not specified')}
+          {/* Quick Copy Action Bar for Designer */}
+          <div className="p-3.5 bg-gradient-to-r from-slate-900 via-[#0c192c] to-cyan-950 text-white rounded-xl border border-cyan-800/40 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-2">
+              <span className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-300">
+                <Copy className="w-4 h-4 text-cyan-400" />
               </span>
+              <div>
+                <span className="text-xs font-bold text-white block">Designer Copy Station</span>
+                <span className="text-[10px] text-cyan-300/80">Copy single client fields or all specs into clipboard</span>
+              </div>
             </div>
 
-            <div>
-              <span className="text-slate-500 font-medium block">Item / Product Name</span>
-              <span className="text-slate-900 font-bold text-sm">
-                {request.itemName || (request.source === 'gallabox' ? 'Not Applicable' : 'Not specified')}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-slate-500 font-medium block">Sales Representative</span>
-              <span className="text-slate-900 font-semibold">{request.salesRepresentativeName}</span>
-            </div>
-
-            <div>
-              <span className="text-slate-500 font-medium block">Assigned Designer</span>
-              <span className="text-slate-900 font-semibold">{request.designerName}</span>
-            </div>
-
-            <div>
-              <span className="text-slate-500 font-medium block">Client Name</span>
-              <span className="text-slate-900 font-semibold">{request.clientName || '-'}</span>
-            </div>
-
-            <div>
-              <span className="text-slate-500 font-medium block">Client Mobile Number</span>
-              <span className="text-slate-900 font-semibold">{request.clientMobileNumber || '-'}</span>
-            </div>
-
-            <div>
-              <span className="text-slate-500 font-medium block">Contact By</span>
-              <span className="text-slate-900 font-semibold">{request.contactBy || '-'}</span>
-            </div>
-
-            <div>
-              <span className="text-slate-500 font-medium block">Waiting Time</span>
-              <span className="text-slate-900 font-semibold">
-                {request.status === 'COMPLETED'
-                  ? formatWaitingTime(request.createdAt, request.completedAt)
-                  : formatWaitingTime(request.createdAt)}
-              </span>
+            <div className="flex flex-wrap items-center gap-2">
+              {request.clientName && (
+                <CopyButton text={request.clientName} label="Client Name" />
+              )}
+              {request.clientMobileNumber && (
+                <CopyButton text={request.clientMobileNumber} label="Phone" />
+              )}
+              <CopyButton
+                text={`Request ID: ${request.requestId}\nMockup Title: ${request.mockupTitle || 'N/A'}\nItem Name: ${request.itemName || 'N/A'}\nClient Name: ${request.clientName || 'N/A'}\nClient Mobile: ${request.clientMobileNumber || 'N/A'}\nContact By: ${request.contactBy || 'N/A'}\nSource: ${request.source}\nPriority: ${request.priority}\n\nNotes / Instructions:\n${request.notes}${request.referenceLinks ? `\n\nReference Link: ${request.referenceLinks}` : ''}${request.additionalLinks ? `\nAdditional Link: ${request.additionalLinks}` : ''}`}
+                label="Copy All Details"
+                className="bg-cyan-500 text-slate-950 font-bold border-cyan-400 hover:bg-cyan-400"
+              />
             </div>
           </div>
 
-          {/* Notes */}
-          <div>
-            <h4 className="font-bold text-slate-800 text-xs mb-1.5 uppercase tracking-wider">
-              Notes / Instructions
-            </h4>
-            <div className="p-3.5 bg-white border border-slate-200 rounded-xl text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs">
+          {/* Primary Request Specs with individual copy buttons */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+            {/* Mockup Title */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                  Mockup Title
+                </span>
+                <span className="text-slate-900 font-bold text-xs truncate block select-all mt-0.5">
+                  {request.mockupTitle || (request.source === 'gallabox' ? 'Gallabox Request' : 'Not specified')}
+                </span>
+              </div>
+              {request.mockupTitle && <CopyButton text={request.mockupTitle} compact />}
+            </div>
+
+            {/* Item Name */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                  Item / Product Name
+                </span>
+                <span className="text-slate-900 font-bold text-xs truncate block select-all mt-0.5">
+                  {request.itemName || (request.source === 'gallabox' ? 'Not Applicable' : 'Not specified')}
+                </span>
+              </div>
+              {request.itemName && <CopyButton text={request.itemName} compact />}
+            </div>
+
+            {/* Client Name */}
+            <div className="p-3 bg-cyan-50/50 rounded-xl border border-cyan-200/80 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-cyan-800 font-bold text-[10px] uppercase tracking-wider block">
+                  Client Name
+                </span>
+                <span className="text-slate-900 font-bold text-xs truncate block select-all mt-0.5">
+                  {request.clientName || 'Not specified'}
+                </span>
+              </div>
+              {request.clientName && (
+                <CopyButton text={request.clientName} label="Name" compact className="bg-white" />
+              )}
+            </div>
+
+            {/* Client Mobile Number */}
+            <div className="p-3 bg-cyan-50/50 rounded-xl border border-cyan-200/80 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-cyan-800 font-bold text-[10px] uppercase tracking-wider block">
+                  Client Mobile Number
+                </span>
+                <span className="font-mono text-slate-900 font-bold text-xs truncate block select-all mt-0.5">
+                  {request.clientMobileNumber || 'Not specified'}
+                </span>
+              </div>
+              {request.clientMobileNumber && (
+                <CopyButton text={request.clientMobileNumber} label="Phone" compact className="bg-white" />
+              )}
+            </div>
+
+            {/* Contact By */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                  Contact By
+                </span>
+                <span className="text-slate-900 font-semibold text-xs truncate block select-all mt-0.5">
+                  {request.contactBy || '-'}
+                </span>
+              </div>
+              {request.contactBy && <CopyButton text={request.contactBy} compact />}
+            </div>
+
+            {/* Sales Rep */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                  Sales Representative
+                </span>
+                <span className="text-slate-900 font-semibold text-xs truncate block mt-0.5">
+                  {request.salesRepresentativeName}
+                </span>
+              </div>
+              <CopyButton text={request.salesRepresentativeName} compact />
+            </div>
+
+            {/* Assigned Designer */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                  Assigned Designer
+                </span>
+                <span className="text-slate-900 font-semibold text-xs truncate block mt-0.5">
+                  {request.designerName}
+                </span>
+              </div>
+              <CopyButton text={request.designerName} compact />
+            </div>
+
+            {/* Waiting Time */}
+            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                  Waiting / Total Time
+                </span>
+                <span className="text-slate-900 font-semibold text-xs truncate block mt-0.5">
+                  {request.status === 'COMPLETED'
+                    ? formatWaitingTime(request.createdAt, request.completedAt)
+                    : formatWaitingTime(request.createdAt)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Notes / Instructions with Copy Button */}
+          <div className="p-4 bg-slate-50/80 rounded-xl border border-slate-200/90 space-y-2">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider">
+                Notes / Instructions
+              </h4>
+              <CopyButton text={request.notes} label="Notes" />
+            </div>
+            <div className="p-3.5 bg-white border border-slate-200 rounded-lg text-slate-800 whitespace-pre-wrap leading-relaxed shadow-2xs text-xs select-all">
               {request.notes}
             </div>
           </div>

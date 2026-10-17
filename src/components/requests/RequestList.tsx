@@ -3,6 +3,7 @@ import { MockupRequest, UserProfile } from '../../types';
 import { PriorityBadge, StatusBadge, SourceBadge, RevisionBadge } from '../common/Badges';
 import { formatDateInTimezone, formatWaitingTime } from '../../utils/dateUtils';
 import { EmptyState } from '../common/EmptyState';
+import { CopyButton } from '../common/CopyButton';
 import {
   Eye,
   Clock,
@@ -11,6 +12,7 @@ import {
   CornerDownRight,
   ChevronDown,
   ChevronRight,
+  Copy,
 } from 'lucide-react';
 
 interface RequestListProps {
@@ -54,7 +56,8 @@ export const RequestList: React.FC<RequestListProps> = ({
           <thead>
             <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-semibold uppercase tracking-wider text-[10px]">
               <th className="py-3 px-4">Request ID</th>
-              <th className="py-3 px-4">Mockup Title / Item / Changes</th>
+              <th className="py-3 px-4">Mockup Title & Item</th>
+              <th className="py-3 px-4">Client / Phone</th>
               <th className="py-3 px-4">Source</th>
               <th className="py-3 px-4">Sales Rep</th>
               <th className="py-3 px-4">Designer</th>
@@ -117,7 +120,7 @@ export const RequestList: React.FC<RequestListProps> = ({
                       </div>
                     </td>
 
-                    <td className="py-3 px-4 max-w-[240px]">
+                    <td className="py-3 px-4 max-w-[220px]">
                       <div className="font-semibold text-slate-800 truncate">
                         {req.mockupTitle || (req.source === 'gallabox' ? 'Gallabox Request' : '-')}
                       </div>
@@ -131,6 +134,30 @@ export const RequestList: React.FC<RequestListProps> = ({
                           <span className="line-clamp-2">{req.latestChangesDetails}</span>
                         </div>
                       )}
+                    </td>
+
+                    {/* Client & Mobile column with single-click copy buttons */}
+                    <td className="py-3 px-4 max-w-[210px]">
+                      <div className="space-y-1">
+                        {req.clientName ? (
+                          <div className="flex items-center justify-between gap-1 bg-cyan-50/70 border border-cyan-200/60 rounded px-1.5 py-0.5">
+                            <span className="font-semibold text-slate-900 truncate" title={req.clientName}>
+                              {req.clientName}
+                            </span>
+                            <CopyButton text={req.clientName} compact label="Name" className="h-5 px-1.5 py-0 text-[10px]" />
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-[11px] block">-</span>
+                        )}
+                        {req.clientMobileNumber && (
+                          <div className="flex items-center justify-between gap-1 bg-slate-50 border border-slate-200 rounded px-1.5 py-0.5">
+                            <span className="font-mono text-[11px] text-slate-800 truncate" title={req.clientMobileNumber}>
+                              {req.clientMobileNumber}
+                            </span>
+                            <CopyButton text={req.clientMobileNumber} compact label="Phone" className="h-5 px-1.5 py-0 text-[10px]" />
+                          </div>
+                        )}
+                      </div>
                     </td>
 
                     <td className="py-3 px-4 whitespace-nowrap">
@@ -191,6 +218,13 @@ export const RequestList: React.FC<RequestListProps> = ({
                           </button>
                         )}
 
+                        <CopyButton
+                          text={`Request ID: ${req.requestId}\nMockup Title: ${req.mockupTitle || 'N/A'}\nItem: ${req.itemName || 'N/A'}\nClient Name: ${req.clientName || 'N/A'}\nClient Phone: ${req.clientMobileNumber || 'N/A'}\nSource: ${req.source}\nPriority: ${req.priority}\nNotes:\n${req.notes}`}
+                          compact
+                          label="Specs"
+                          title="Copy client and mockup specifications to clipboard"
+                        />
+
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -243,6 +277,11 @@ export const RequestList: React.FC<RequestListProps> = ({
                             >
                               {rev.changesDetails}
                             </div>
+                          </td>
+
+                          {/* 2b. Client info spacer */}
+                          <td className="py-2.5 px-4 text-slate-400 text-[11px] whitespace-nowrap">
+                            -
                           </td>
 
                           {/* 3. Source */}
@@ -395,6 +434,29 @@ export const RequestList: React.FC<RequestListProps> = ({
                 <p className="text-[11px] text-slate-500 line-clamp-1 mb-2">
                   {req.itemName || (req.source === 'gallabox' ? 'Direct request notes' : '-')}
                 </p>
+
+                {/* Client Contact Info with individual single-click copy buttons */}
+                {(req.clientName || req.clientMobileNumber) && (
+                  <div className="mb-2.5 p-2 rounded-lg bg-cyan-50/60 border border-cyan-200/80 space-y-1.5">
+                    <span className="text-[10px] font-bold text-cyan-800 uppercase tracking-wider block">
+                      Client Contact Info
+                    </span>
+                    <div className="space-y-1">
+                      {req.clientName && (
+                        <div className="flex items-center justify-between gap-1 bg-white p-1.5 rounded border border-cyan-200/70 text-xs">
+                          <span className="font-bold text-slate-900 truncate">{req.clientName}</span>
+                          <CopyButton text={req.clientName} compact label="Name" className="h-5 px-1.5 py-0 text-[10px]" />
+                        </div>
+                      )}
+                      {req.clientMobileNumber && (
+                        <div className="flex items-center justify-between gap-1 bg-white p-1.5 rounded border border-cyan-200/70 text-xs">
+                          <span className="font-mono font-semibold text-slate-800 truncate">{req.clientMobileNumber}</span>
+                          <CopyButton text={req.clientMobileNumber} compact label="Phone" className="h-5 px-1.5 py-0 text-[10px]" />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* If active revision, display Changes Details in card */}
                 {req.status === 'PENDING' && req.latestChangesDetails && (
