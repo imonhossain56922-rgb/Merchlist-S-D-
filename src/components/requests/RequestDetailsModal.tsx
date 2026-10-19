@@ -8,7 +8,10 @@ import {
   reopenMockupRequest,
   softDeleteMockupRequest,
   requestMockupRevision,
+  requestBackMockup,
+  resubmitReturnedRequest,
 } from '../../services/requestService';
+import { generateProductionJobSheetPdf } from '../../utils/pdfGenerator';
 import { formatDateInTimezone, formatWaitingTime } from '../../utils/dateUtils';
 import {
   X,
@@ -26,6 +29,10 @@ import {
   Send,
   Copy,
   Check,
+  FileDown,
+  Loader2,
+  Plus,
+  CornerUpLeft,
 } from 'lucide-react';
 
 import { CopyButton } from '../common/CopyButton';
@@ -43,7 +50,7 @@ interface RequestDetailsModalProps {
 export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
   request,
   currentUser,
-  timezone,
+  timezone = 'Asia/Dubai',
   isOpen,
   onClose,
   onUpdate,
@@ -51,23 +58,57 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
 }) => {
   const [showCompleteConfirm, setShowCompleteConfirm] = useState(false);
   const [showRejectModal, setShowRejectModal] = useState(false);
+  const [showRequestBackModal, setShowRequestBackModal] = useState(false);
+  const [requestBackReason, setRequestBackReason] = useState('');
   const [showRevisionModal, setShowRevisionModal] = useState(initialOpenRevisionModal);
   const [changesDetails, setChangesDetails] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Resubmit edit states for Sales Representative
+  // Resubmit edit states for Sales Representative (Rejected)
   const [isResubmitting, setIsResubmitting] = useState(false);
   const [editNotes, setEditNotes] = useState('');
   const [editTitle, setEditTitle] = useState('');
   const [editItem, setEditItem] = useState('');
+
+  // Resubmit edit states for Returned for Clarification (REQUEST_BACK)
+  const [isResubmittingReturned, setIsResubmittingReturned] = useState(false);
+  const [returnedItems, setReturnedItems] = useState<string[]>([]);
+  const [returnedLinks, setReturnedLinks] = useState<string[]>([]);
+  const [returnedNotes, setReturnedNotes] = useState('');
+  const [returnedAttachments, setReturnedAttachments] = useState<Array<{ id: string; name: string; url: string; size: number; type: string; uploadedAt: string }>>([]);
 
   React.useEffect(() => {
     if (initialOpenRevisionModal) {
       setShowRevisionModal(true);
     }
   }, [initialOpenRevisionModal, request?.id]);
+
+  React.useEffect(() => {
+    if (request) {
+      if (request.itemNames && request.itemNames.length > 0) {
+        setReturnedItems([...request.itemNames]);
+      } else if (request.itemName) {
+        setReturnedItems([request.itemName]);
+      } else {
+        setReturnedItems(['']);
+      }
+
+      if (request.additionalReferenceLinks && request.additionalReferenceLinks.length > 0) {
+        setReturnedLinks([...request.additionalReferenceLinks]);
+      } else {
+        const initialL: string[] = [];
+        if (request.referenceLinks) initialL.push(request.referenceLinks);
+        if (request.additionalLinks) initialL.push(request.additionalLinks);
+        setReturnedLinks(initialL.length > 0 ? initialL : ['']);
+      }
+
+      setReturnedNotes(request.notes || '');
+      setReturnedAttachments([]);
+    }
+  }, [request]);
 
   if (!isOpen || !request) return null;
 
@@ -223,6 +264,97 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
     }
   };
 
+  const handleDownloadJobSheet = async () => {
+    setIsGeneratingPdf(true);
+    setErrorMessage(null);
+    try {
+      await generateProductionJobSheetPdf({
+        request,
+        timezone,
+      });
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to generate Production Job Sheet PDF.');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const handleRequestBack = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!requestBackReason.trim()) {
+      setErrorMessage('Please describe the required clarification or missing assets.');
+      return;
+    }
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await requestBackMockup({
+        request,
+        designerId: currentUser.userId,
+        designerName: currentUser.name,
+        reason: requestBackReason.trim(),
+      });
+      setShowRequestBackModal(false);
+      setRequestBackReason('');
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to return request back.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleResubmitReturned = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const validItems = returnedItems.map((i) => i.trim()).filter(Boolean);
+    const validLinks = returnedLinks.map((l) => l.trim()).filter(Boolean);
+
+    setIsSubmitting(true);
+    setErrorMessage(null);
+    try {
+      await resubmitReturnedRequest({
+        request,
+        salesRepresentativeId: currentUser.userId,
+        salesRepresentativeName: currentUser.name,
+        updatedNotes: returnedNotes.trim() || undefined,
+        itemNames: validItems.length > 0 ? validItems : undefined,
+        additionalReferenceLinks: validLinks.length > 0 ? validLinks : undefined,
+        newAttachments: returnedAttachments.length > 0 ? returnedAttachments : undefined,
+        timezone,
+      });
+      setIsResubmittingReturned(false);
+      onUpdate();
+      onClose();
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to resubmit request.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleReturnedAttachmentUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    Array.from(files).forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        setReturnedAttachments((prev) => [
+          ...prev,
+          {
+            id: `ATT_RET_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            name: file.name,
+            url: reader.result as string,
+            size: file.size,
+            type: file.type,
+            uploadedAt: new Date().toISOString(),
+          },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
       <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs" onClick={onClose} />
@@ -248,12 +380,32 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
             <StatusBadge status={request.status} />
             <SourceBadge source={request.source} />
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+
+          <div className="flex items-center gap-2">
+            {/* Download Production Job Sheet PDF */}
+            <button
+              type="button"
+              onClick={handleDownloadJobSheet}
+              disabled={isGeneratingPdf}
+              className="px-3 py-1.5 rounded-xl bg-cyan-500/20 text-cyan-300 border border-cyan-400/40 hover:bg-cyan-500/30 font-semibold text-xs flex items-center gap-1.5 transition-colors cursor-pointer shadow-xs"
+              title="Download Merchlist Production Job Sheet (PDF)"
+            >
+              {isGeneratingPdf ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FileDown className="w-3.5 h-3.5 text-cyan-300" />
+              )}
+              <span className="hidden sm:inline">Job Sheet (PDF)</span>
+              <span className="sm:hidden">PDF</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -288,6 +440,206 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
                 </div>
               </div>
             </div>
+          )}
+
+          {/* Returned for Clarification (REQUEST_BACK) Alert Banner */}
+          {request.status === 'REQUEST_BACK' && (
+            <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 shadow-2xs animate-in fade-in">
+              <div className="flex items-start gap-3">
+                <RotateCcw className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h4 className="font-bold text-amber-950 text-sm">
+                      Returned for Clarification by Designer
+                    </h4>
+                    <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-500 text-slate-950">
+                      Action Required
+                    </span>
+                  </div>
+                  <div className="mt-2 p-3 bg-white rounded-lg border border-amber-200 text-slate-900 leading-relaxed shadow-2xs">
+                    <span className="font-bold text-amber-900 block text-[11px] mb-0.5">
+                      Clarification / Reason Requested:
+                    </span>
+                    <p className="whitespace-pre-wrap font-medium">{request.requestBackReason || 'Designer requested updates or clarification.'}</p>
+                  </div>
+                  <p className="text-[11px] text-amber-800 mt-2">
+                    Returned on {formatDateInTimezone(request.requestBackAt, timezone)} by {request.requestBackByName || request.designerName}
+                  </p>
+
+                  {isSalesOwner && !isResubmittingReturned && (
+                    <button
+                      onClick={() => setIsResubmittingReturned(true)}
+                      className="mt-3 px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold hover:bg-amber-400 transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <FileEdit className="w-4 h-4" />
+                      <span>Update & Resubmit to Designer</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Returned Request Resubmission Form (Sales Representative) */}
+          {isResubmittingReturned && (
+            <form onSubmit={handleResubmitReturned} className="p-4 bg-amber-50/50 rounded-2xl border border-amber-300 space-y-4 shadow-sm animate-in fade-in">
+              <div className="flex items-center justify-between pb-2 border-b border-amber-200">
+                <h4 className="font-bold text-amber-950 text-sm flex items-center gap-2">
+                  <CornerUpLeft className="w-4 h-4 text-amber-700" />
+                  <span>Update Specifications & Return to Designer Queue</span>
+                </h4>
+                <button
+                  type="button"
+                  onClick={() => setIsResubmittingReturned(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Multiple Items */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-800">
+                    Item(s) / Product(s)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setReturnedItems((prev) => [...prev, ''])}
+                    className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Item</span>
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {returnedItems.map((itm, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className="w-6 text-center text-xs font-bold text-slate-400 font-mono">
+                        #{idx + 1}
+                      </span>
+                      <input
+                        type="text"
+                        value={itm}
+                        onChange={(e) => {
+                          const next = [...returnedItems];
+                          next[idx] = e.target.value;
+                          setReturnedItems(next);
+                        }}
+                        placeholder={`Item #${idx + 1}`}
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                      {returnedItems.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setReturnedItems((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Updated Notes / Response to Designer */}
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Clarification Notes / Instructions for Designer
+                </label>
+                <textarea
+                  rows={3}
+                  value={returnedNotes}
+                  onChange={(e) => setReturnedNotes(e.target.value)}
+                  placeholder="Explain the updates made, clarification for the designer, or new specifications..."
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              {/* Reference Links */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-800">
+                    Reference Links (Drive, Canva, Figma)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setReturnedLinks((prev) => [...prev, ''])}
+                    className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Link</span>
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {returnedLinks.map((lnk, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={lnk}
+                        onChange={(e) => {
+                          const next = [...returnedLinks];
+                          next[idx] = e.target.value;
+                          setReturnedLinks(next);
+                        }}
+                        placeholder="https://..."
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                      />
+                      {returnedLinks.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setReturnedLinks((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Upload New Attachments */}
+              <div>
+                <label className="block text-xs font-bold text-slate-800 mb-1">
+                  Upload Additional Files / Logos (Optional)
+                </label>
+                <input
+                  type="file"
+                  multiple
+                  onChange={handleReturnedAttachmentUpload}
+                  className="block w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-100 file:text-amber-900 hover:file:bg-amber-200 cursor-pointer"
+                />
+                {returnedAttachments.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {returnedAttachments.map((att) => (
+                      <span key={att.id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-amber-300 text-[11px] font-semibold text-slate-800">
+                        <Paperclip className="w-3 h-3 text-amber-700" />
+                        {att.name}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-amber-200">
+                <button
+                  type="button"
+                  onClick={() => setIsResubmittingReturned(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50 text-xs cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold hover:bg-amber-400 text-xs shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isSubmitting ? 'Resubmitting...' : 'Confirm Resubmission to Designer'}
+                </button>
+              </div>
+            </form>
           )}
 
           {/* Rejection Alert Banner if rejected */}
@@ -421,18 +773,51 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
               {request.mockupTitle && <CopyButton text={request.mockupTitle} compact />}
             </div>
 
-            {/* Item Name */}
-            <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
-                  Item / Product Name
-                </span>
-                <span className="text-slate-900 font-bold text-xs truncate block select-all mt-0.5">
-                  {request.itemName || (request.source === 'gallabox' ? 'Not Applicable' : 'Not specified')}
-                </span>
+            {/* Item Name(s) */}
+            {request.itemNames && request.itemNames.length > 0 ? (
+              <div className="md:col-span-2 p-3.5 bg-slate-50/90 rounded-xl border border-slate-200/90 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-500 font-bold text-[10px] uppercase tracking-wider block">
+                    Ordered Product(s) / Item(s) ({request.itemNames.length})
+                  </span>
+                  <CopyButton
+                    text={request.itemNames.map((n, i) => `${i + 1}. ${n}`).join('\n')}
+                    label="All Items"
+                    compact
+                  />
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {request.itemNames.map((itm, i) => (
+                    <div
+                      key={i}
+                      className="p-2.5 bg-white rounded-lg border border-slate-200 flex items-center justify-between gap-2 shadow-2xs"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="w-5 h-5 rounded bg-slate-100 text-slate-700 font-mono text-[10px] font-bold flex items-center justify-center flex-shrink-0">
+                          {i + 1}
+                        </span>
+                        <span className="font-semibold text-slate-900 text-xs truncate select-all">
+                          {itm}
+                        </span>
+                      </div>
+                      <CopyButton text={itm} compact />
+                    </div>
+                  ))}
+                </div>
               </div>
-              {request.itemName && <CopyButton text={request.itemName} compact />}
-            </div>
+            ) : (
+              <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200/90 flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <span className="text-slate-400 font-semibold text-[10px] uppercase tracking-wider block">
+                    Item / Product Name
+                  </span>
+                  <span className="text-slate-900 font-bold text-xs truncate block select-all mt-0.5">
+                    {request.itemName || (request.source === 'gallabox' ? 'Not Applicable' : 'Not specified')}
+                  </span>
+                </div>
+                {request.itemName && <CopyButton text={request.itemName} compact />}
+              </div>
+            )}
 
             {/* Client Name */}
             <div className="p-3 bg-cyan-50/50 rounded-xl border border-cyan-200/80 flex items-center justify-between gap-3">

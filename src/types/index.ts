@@ -4,7 +4,19 @@ export type RequestSource = 'gallabox' | 'whatsapp' | 'email' | 'others';
 
 export type RequestPriority = 'REGULAR' | 'URGENT' | 'SUPER_URGENT';
 
-export type RequestStatus = 'PENDING' | 'REJECTED' | 'COMPLETED';
+export type RequestStatus = 'PENDING' | 'REJECTED' | 'REQUEST_BACK' | 'COMPLETED';
+
+export interface TemporaryDesignerAssignment {
+  designerId: string;
+  designerName: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  assignedAt: string;
+  assignedBy: string;
+  assignedByName: string;
+  previousDesignerId: string;
+  previousDesignerName: string;
+}
 
 export interface UserProfile {
   userId: string;
@@ -15,6 +27,7 @@ export interface UserProfile {
   avatarUrl?: string | null;
   assignedDesignerId?: string;
   assignedDesignerName?: string;
+  temporaryDesigner?: TemporaryDesignerAssignment | null;
   createdAt: string;
   updatedAt: string;
   lastActivityAt?: string;
@@ -36,6 +49,10 @@ export interface RequestAttachment {
 export interface RequestRevision {
   revisionNumber: number;
   changesDetails: string;
+  itemNames?: string[];
+  itemName?: string | null;
+  additionalReferenceLinks?: string[];
+  attachments?: RequestAttachment[];
   requestedAt: string;
   requestedDate?: string | null;
   requestedTime?: string | null;
@@ -64,12 +81,14 @@ export interface MockupRequest {
   source: RequestSource;
   mockupTitle: string | null;
   itemName: string | null;
+  itemNames?: string[];
   clientName?: string | null;
   clientMobileNumber?: string | null;
   contactBy?: string | null;
   notes: string;
   referenceLinks?: string | null;
   additionalLinks?: string | null;
+  additionalReferenceLinks?: string[];
   attachments?: RequestAttachment[];
   salesRepresentativeId: string;
   salesRepresentativeName: string;
@@ -97,6 +116,10 @@ export interface MockupRequest {
   rejectedBy?: string | null;
   rejectedByName?: string | null;
   rejectionReason?: string | null;
+  requestBackAt?: string | null;
+  requestBackBy?: string | null;
+  requestBackByName?: string | null;
+  requestBackReason?: string | null;
   revisions?: RequestRevision[];
   currentRevision?: number;
   latestChangesDetails?: string | null;
@@ -112,7 +135,7 @@ export interface AppNotification {
   userId: string;
   title: string;
   message: string;
-  type: 'REQUEST_ASSIGNED' | 'REQUEST_COMPLETED' | 'REQUEST_REJECTED' | 'REQUEST_RESUBMITTED' | 'SYSTEM_ALERT';
+  type: 'REQUEST_ASSIGNED' | 'REQUEST_COMPLETED' | 'REQUEST_REJECTED' | 'REQUEST_RESUBMITTED' | 'REQUEST_BACK' | 'SYSTEM_ALERT';
   requestId?: string;
   read: boolean;
   createdAt: string;

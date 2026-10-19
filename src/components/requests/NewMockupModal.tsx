@@ -1,7 +1,25 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { UserProfile, RequestSource, RequestPriority, DesignerCapacity } from '../../types';
-import { createMockupRequest, getDesignerCapacity } from '../../services/requestService';
-import { X, Upload, AlertCircle, Zap, Clock, ShieldAlert, Check, Palette } from 'lucide-react';
+import {
+  createMockupRequest,
+  getDesignerCapacity,
+  getActiveDesignerForSalesUser,
+  getDesignerPriorityWarning,
+} from '../../services/requestService';
+import {
+  X,
+  Upload,
+  AlertCircle,
+  Zap,
+  Clock,
+  ShieldAlert,
+  Check,
+  Palette,
+  Plus,
+  Trash2,
+  Calendar,
+  AlertTriangle,
+} from 'lucide-react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 
@@ -22,16 +40,20 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
   onClose,
   onSuccess,
 }) => {
+  const activeAssignment = useMemo(() => {
+    return getActiveDesignerForSalesUser(currentUser);
+  }, [currentUser]);
+
   const [source, setSource] = useState<RequestSource>('whatsapp');
   const [priority, setPriority] = useState<RequestPriority>('REGULAR');
+  const [priorityWarning, setPriorityWarning] = useState<string | null>(null);
   const [mockupTitle, setMockupTitle] = useState('');
-  const [itemName, setItemName] = useState('');
+  const [items, setItems] = useState<string[]>(['']);
   const [clientName, setClientName] = useState('');
   const [clientMobileNumber, setClientMobileNumber] = useState('');
   const [contactBy, setContactBy] = useState('');
   const [notes, setNotes] = useState('');
-  const [referenceLinks, setReferenceLinks] = useState('');
-  const [additionalLinks, setAdditionalLinks] = useState('');
+  const [refLinks, setRefLinks] = useState<string[]>(['']);
   const [attachments, setAttachments] = useState<Array<{ id: string; name: string; url: string; size: number; type: string; uploadedAt: string }>>([]);
 
   const [availableDesigners, setAvailableDesigners] = useState<UserProfile[]>([]);
@@ -55,19 +77,20 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
   }, [allUsers, isOpen]);
 
   const [selectedDesignerId, setSelectedDesignerId] = useState<string>(() => {
-    return currentUser.assignedDesignerId || '';
+    return activeAssignment.designerId || currentUser.assignedDesignerId || '';
   });
 
-  // Automatically select assigned designer or first available designer
+  // Automatically select active assigned designer or first available designer
   useEffect(() => {
+    const targetId = activeAssignment.designerId || currentUser.assignedDesignerId;
     if (!selectedDesignerId || !availableDesigners.some((d) => d.userId === selectedDesignerId)) {
-      if (currentUser.assignedDesignerId && availableDesigners.some((d) => d.userId === currentUser.assignedDesignerId)) {
-        setSelectedDesignerId(currentUser.assignedDesignerId);
+      if (targetId && availableDesigners.some((d) => d.userId === targetId)) {
+        setSelectedDesignerId(targetId);
       } else if (availableDesigners.length > 0) {
         setSelectedDesignerId(availableDesigners[0].userId);
       }
     }
-  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId]);
+  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId, activeAssignment]);
 
   const selectedDesigner = availableDesigners.find((d) => d.userId === selectedDesignerId) ||
     allUsers.find((u) => u.userId === selectedDesignerId);
@@ -78,13 +101,29 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
 
   // Load Designer capacity
   useEffect(() => {
-    const designerId = selectedDesignerId || currentUser.assignedDesignerId;
+    const designerId = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId;
     if (designerId) {
-      getDesignerCapacity(designerId, selectedDesigner?.name || currentUser.assignedDesignerName).then((cap) => {
+      getDesignerCapacity(designerId, selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName).then((cap) => {
         setCapacity(cap);
       });
     }
-  }, [selectedDesignerId, currentUser.assignedDesignerId, selectedDesigner?.name, isOpen]);
+  }, [selectedDesignerId, currentUser.assignedDesignerId, activeAssignment, selectedDesigner?.name, isOpen]);
+
+  // Check priority warning for urgent requests
+  useEffect(() => {
+    const designerId = selectedDesignerId || activeAssignment.designerId;
+    if (designerId && (priority === 'URGENT' || priority === 'SUPER_URGENT')) {
+      getDesignerPriorityWarning(designerId, priority).then((warn) => {
+        if (warn.hasWarning && warn.warningMessage) {
+          setPriorityWarning(warn.warningMessage);
+        } else {
+          setPriorityWarning(null);
+        }
+      });
+    } else {
+      setPriorityWarning(null);
+    }
+  }, [selectedDesignerId, activeAssignment.designerId, priority, isOpen]);
 
   if (!isOpen) return null;
 
@@ -127,26 +166,24 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     e.preventDefault();
     setErrorMessage(null);
 
-    const designerIdToUse = selectedDesignerId || currentUser.assignedDesignerId;
-    const designerNameToUse = selectedDesigner?.name || currentUser.assignedDesignerName || 'Assigned Designer';
+    const designerIdToUse = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId;
+    const designerNameToUse = selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName || 'Assigned Designer';
 
     if (!designerIdToUse) {
       setErrorMessage('Please select a Designer for this mockup request.');
       return;
     }
 
-    if (!notes.trim()) {
-      setErrorMessage('Notes / Instructions are required.');
-      return;
-    }
+    const validItems = items.map((i) => i.trim()).filter(Boolean);
+    const validLinks = refLinks.map((l) => l.trim()).filter(Boolean);
 
     if (!isGallabox) {
       if (!mockupTitle.trim()) {
         setErrorMessage('Mockup Title is required.');
         return;
       }
-      if (!itemName.trim()) {
-        setErrorMessage('Item / Product Name is required.');
+      if (validItems.length === 0) {
+        setErrorMessage('Please provide at least one Item / Product Name.');
         return;
       }
     }
@@ -168,17 +205,20 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
 
     setIsSubmitting(true);
     try {
+      const finalItem = validItems.length > 0 ? validItems.join(', ') : (isGallabox ? null : 'Custom Merchandise');
       await createMockupRequest({
         source,
         priority,
         mockupTitle: isGallabox ? null : mockupTitle.trim(),
-        itemName: isGallabox ? null : itemName.trim(),
+        itemName: finalItem,
+        itemNames: validItems.length > 0 ? validItems : (finalItem ? [finalItem] : []),
         clientName: clientName.trim() || null,
         clientMobileNumber: clientMobileNumber.trim() || null,
         contactBy: isGallabox ? null : contactBy.trim() || null,
         notes: notes.trim(),
-        referenceLinks: isGallabox ? null : referenceLinks.trim() || null,
-        additionalLinks: isGallabox ? null : additionalLinks.trim() || null,
+        referenceLinks: isGallabox ? null : validLinks[0] || null,
+        additionalLinks: isGallabox ? null : validLinks[1] || null,
+        additionalReferenceLinks: isGallabox ? [] : validLinks,
         attachments,
         salesRepresentativeId: currentUser.userId,
         salesRepresentativeName: currentUser.name,
@@ -377,7 +417,31 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                 Super Urgent {capacity && !capacity.canAcceptSuperUrgent && '(Full)'}
               </button>
             </div>
+
+            {/* Turnaround Advisory Notice */}
+            {priorityWarning && (
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2 shadow-2xs">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold">Notice: </span>
+                  <span>{priorityWarning}</span>
+                </div>
+              </div>
+            )}
           </div>
+
+          {/* Temporary Coverage Alert Banner */}
+          {activeAssignment.isTemporary && (
+            <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-950 flex items-start gap-2.5">
+              <Calendar className="w-4 h-4 text-amber-700 flex-shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold uppercase tracking-wider text-[11px] text-amber-900 block">Temporary Coverage Active</span>
+                <span className="text-amber-800">
+                  Routing to <strong>{activeAssignment.designerName}</strong> until <strong>{activeAssignment.endDate}</strong> (covering for <strong>{activeAssignment.originalDesignerName}</strong>).
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Form Fields: DYNAMIC BASED ON SOURCE */}
           {isGallabox ? (
@@ -411,13 +475,12 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                  Notes / Instructions <span className="text-rose-500">*</span>
+                  Notes / Instructions <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <textarea
-                  rows={4}
+                  rows={3}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  required
                   className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
                 />
               </div>
@@ -425,31 +488,65 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
           ) : (
             /* WHATSAPP / EMAIL / OTHERS: Standard Full Form */
             <div className="space-y-4 pt-2 border-t border-slate-200">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                    Mockup Title <span className="text-rose-500">*</span>
+              <div>
+                <label className="block text-xs font-semibold text-slate-800 mb-1.5">
+                  Mockup Title <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={mockupTitle}
+                  onChange={(e) => setMockupTitle(e.target.value)}
+                  required
+                  placeholder="e.g. Acme Corporate Merch"
+                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                />
+              </div>
+
+              {/* Multiple Items */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-800">
+                    Item(s) / Product(s) <span className="text-rose-500">*</span>
                   </label>
-                  <input
-                    type="text"
-                    value={mockupTitle}
-                    onChange={(e) => setMockupTitle(e.target.value)}
-                    required
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setItems((prev) => [...prev, ''])}
+                    className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Item</span>
+                  </button>
                 </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                    Item / Product Name <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={itemName}
-                    onChange={(e) => setItemName(e.target.value)}
-                    required
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                  />
+                <div className="space-y-1.5">
+                  {items.map((item, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className="w-5 text-center text-xs font-bold text-slate-400 font-mono">
+                        #{idx + 1}
+                      </span>
+                      <input
+                        type="text"
+                        value={item}
+                        onChange={(e) => {
+                          const next = [...items];
+                          next[idx] = e.target.value;
+                          setItems(next);
+                        }}
+                        placeholder={idx === 0 ? "e.g. Black Dry-Fit Polo Shirt with Embroidery" : `Item #${idx + 1} name`}
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                      />
+                      {items.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                          title="Remove item"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -493,40 +590,58 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
 
               <div>
                 <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                  Notes / Instructions <span className="text-rose-500">*</span>
+                  Notes / Instructions <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <textarea
                   rows={3}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  required
+                  placeholder="Design details, pantone colors, placements..."
                   className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                    Reference Link
+              {/* Multiple Reference Links */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-800">
+                    Reference Link(s)
                   </label>
-                  <input
-                    type="url"
-                    value={referenceLinks}
-                    onChange={(e) => setReferenceLinks(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                  />
+                  <button
+                    type="button"
+                    onClick={() => setRefLinks((prev) => [...prev, ''])}
+                    className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Link</span>
+                  </button>
                 </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                    Additional Links
-                  </label>
-                  <input
-                    type="url"
-                    value={additionalLinks}
-                    onChange={(e) => setAdditionalLinks(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                  />
+                <div className="space-y-1.5">
+                  {refLinks.map((link, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={link}
+                        onChange={(e) => {
+                          const next = [...refLinks];
+                          next[idx] = e.target.value;
+                          setRefLinks(next);
+                        }}
+                        placeholder={idx === 0 ? "https://drive.google.com/..." : "https://..."}
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                      />
+                      {refLinks.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setRefLinks((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 rounded cursor-pointer"
+                          title="Remove link"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>

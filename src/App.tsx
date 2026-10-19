@@ -381,7 +381,7 @@ export default function App() {
               currentUser={currentUser}
               requests={requests}
               timezone={settings.timezone}
-              onOpenNewModal={() => setIsNewMockupOpen(true)}
+              onOpenNewModal={() => setCurrentTab('new_mockup')}
               onSelectRequest={(req) => setSelectedRequest(req)}
               onOpenRevisionRequest={handleOpenRevisionModal}
             />
@@ -512,7 +512,7 @@ export default function App() {
               {(currentUser.role === 'SALES_REPRESENTATIVE' || currentUser.role === 'ADMIN' || currentUser.role === 'HEAD_OF_SALES') && (
                 <button
                   type="button"
-                  onClick={() => setIsNewMockupOpen(true)}
+                  onClick={() => setCurrentTab('new_mockup')}
                   className="px-4 py-2 rounded-xl bg-[#0c192c] text-white text-xs font-semibold hover:bg-slate-800 transition-colors shadow-xs flex items-center gap-2 cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5 text-cyan-400" />

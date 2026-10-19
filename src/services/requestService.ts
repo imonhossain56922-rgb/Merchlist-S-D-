@@ -111,16 +111,354 @@ export async function getDesignerCapacity(designerId: string, designerName = '')
   }
 }
 
+/**
+ * Returns the currently active designer for a Sales Representative,
+ * taking into account active temporary assignments and automatic expiry.
+ */
+export function getActiveDesignerForSalesUser(
+  user: UserProfile,
+  now = new Date()
+): {
+  designerId: string;
+  designerName: string;
+  isTemporary: boolean;
+  temporaryAssignment?: UserProfile['temporaryDesigner'];
+} {
+  if (user.role !== 'SALES_REPRESENTATIVE') {
+    return {
+      designerId: user.assignedDesignerId || '',
+      designerName: user.assignedDesignerName || '',
+      isTemporary: false,
+    };
+  }
+
+  const temp = user.temporaryDesigner;
+  if (temp && temp.designerId && temp.startDate && temp.endDate) {
+    const todayStr = now.toISOString().slice(0, 10);
+    // Check if within the temporary window
+    if (todayStr >= temp.startDate && todayStr <= temp.endDate) {
+      return {
+        designerId: temp.designerId,
+        designerName: temp.designerName,
+        isTemporary: true,
+        temporaryAssignment: temp,
+      };
+    }
+    // Expired temporary assignment - automatically reverts to original/permanent designer!
+  }
+
+  return {
+    designerId: user.assignedDesignerId || '',
+    designerName: user.assignedDesignerName || '',
+    isTemporary: false,
+  };
+}
+
+/**
+ * Checks queue of selected designer for priority warning popup (Requirement 19).
+ */
+export async function getDesignerPriorityWarning(
+  designerId: string
+): Promise<{
+  showWarning: boolean;
+  superUrgentCount: number;
+  urgentCount: number;
+  message: string;
+}> {
+  try {
+    const q = query(collection(db, 'mockupRequests'), where('designerId', '==', designerId));
+    const snap = await getDocs(q);
+
+    let superUrgentCount = 0;
+    let urgentCount = 0;
+
+    snap.forEach((docSnap) => {
+      const data = docSnap.data() as MockupRequest;
+      if (data.deleted) return;
+      if (data.status !== 'PENDING') return;
+
+      if (data.priority === 'SUPER_URGENT') superUrgentCount++;
+      else if (data.priority === 'URGENT') urgentCount++;
+    });
+
+    if (superUrgentCount === 0 && urgentCount === 0) {
+      return {
+        showWarning: false,
+        superUrgentCount: 0,
+        urgentCount: 0,
+        message: '',
+      };
+    }
+
+    let detailText = '';
+    if (superUrgentCount > 0 && urgentCount > 0) {
+      const suLabel = `${superUrgentCount} Super Urgent request${superUrgentCount > 1 ? 's' : ''}`;
+      const uLabel = `${urgentCount} Urgent request${urgentCount > 1 ? 's' : ''}`;
+      detailText = `${suLabel} and ${uLabel}`;
+    } else if (superUrgentCount > 0) {
+      detailText = `${superUrgentCount} Super Urgent request${superUrgentCount > 1 ? 's' : ''}`;
+    } else {
+      detailText = `${urgentCount} Urgent request${urgentCount > 1 ? 's' : ''}`;
+    }
+
+    const message = `Your mockup may take a little longer to complete because the selected designer currently has ${detailText} in the queue. These priority requests will be completed first in sequence before the designer proceeds with the remaining requests. Thank you for your understanding.`;
+
+    return {
+      showWarning: true,
+      superUrgentCount,
+      urgentCount,
+      message,
+    };
+  } catch (err) {
+    console.warn('Failed to calculate priority warning:', err);
+    return {
+      showWarning: false,
+      superUrgentCount: 0,
+      urgentCount: 0,
+      message: '',
+    };
+  }
+}
+
+/**
+ * Automatically transfers ALL pending/incomplete mockup requests belonging to a sales user
+ * to the new designer (Requirement 8). Preserves historical IDs, audit trail, and completed requests.
+ */
+export async function transferPendingRequestsForSalesUser(params: {
+  salesUserId: string;
+  salesUserName: string;
+  newDesignerId: string;
+  newDesignerName: string;
+  actorId: string;
+  actorName: string;
+  reason: string;
+}): Promise<number> {
+  const { salesUserId, newDesignerId, newDesignerName, actorName, reason } = params;
+  try {
+    const q = query(
+      collection(db, 'mockupRequests'),
+      where('salesRepresentativeId', '==', salesUserId)
+    );
+    const snap = await getDocs(q);
+
+    let movedCount = 0;
+    const nowIso = new Date().toISOString();
+
+    for (const docSnap of snap.docs) {
+      const reqData = docSnap.data() as MockupRequest;
+      // Do NOT move completed or soft-deleted requests
+      if (reqData.deleted) continue;
+      if (reqData.status === 'COMPLETED') continue;
+
+      const updatedTimeline = [
+        ...(reqData.timeline || []),
+        {
+          action: 'Designer Reassigned',
+          timestamp: nowIso,
+          performedBy: params.actorId,
+          performedByName: actorName,
+          note: `Transferred to ${newDesignerName} — ${reason}`,
+        },
+      ];
+
+      await updateDoc(docSnap.ref, {
+        designerId: newDesignerId,
+        designerName: newDesignerName,
+        updatedAt: nowIso,
+        timeline: updatedTimeline,
+      });
+
+      movedCount++;
+    }
+
+    if (movedCount > 0) {
+      await createNotification({
+        userId: newDesignerId,
+        title: 'Pending Requests Transferred',
+        message: `${movedCount} pending request(s) from ${params.salesUserName} were transferred to your queue.`,
+        type: 'REQUEST_ASSIGNED',
+      });
+    }
+
+    return movedCount;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'mockupRequests');
+    return 0;
+  }
+}
+
+/**
+ * Permanent Designer Reassignment (Admin Only - Requirement 7)
+ */
+export async function reassignSalesUserDesignerPermanent(params: {
+  admin: UserProfile;
+  salesUser: UserProfile;
+  newDesigner: UserProfile;
+}): Promise<void> {
+  if (params.admin.role !== 'ADMIN') {
+    throw new Error('Unauthorized: Only administrators can permanently change Designer assignments.');
+  }
+
+  const nowIso = new Date().toISOString();
+  const prevDesignerId = params.salesUser.assignedDesignerId || 'None';
+  const prevDesignerName = params.salesUser.assignedDesignerName || 'Unassigned';
+
+  await updateDoc(doc(db, 'users', params.salesUser.userId), {
+    assignedDesignerId: params.newDesigner.userId,
+    assignedDesignerName: params.newDesigner.name,
+    temporaryDesigner: null, // Clear any active temporary override
+    updatedAt: nowIso,
+  });
+
+  await logAuditEvent({
+    action: 'PERMANENT_DESIGNER_CHANGE',
+    performedBy: params.admin.userId,
+    performedByName: params.admin.name,
+    performedByRole: 'ADMIN',
+    targetId: params.salesUser.userId,
+    targetType: 'User',
+    previousValue: `Previous Designer: ${prevDesignerName} (${prevDesignerId})`,
+    newValue: `New Permanent Designer: ${params.newDesigner.name} (${params.newDesigner.userId})`,
+  });
+
+  // Transfer all existing pending requests
+  await transferPendingRequestsForSalesUser({
+    salesUserId: params.salesUser.userId,
+    salesUserName: params.salesUser.name,
+    newDesignerId: params.newDesigner.userId,
+    newDesignerName: params.newDesigner.name,
+    actorId: params.admin.userId,
+    actorName: params.admin.name,
+    reason: `Permanent assignment to ${params.newDesigner.name} by Administrator`,
+  });
+}
+
+/**
+ * Temporary Designer Reassignment (Head of Sales / Admin - Requirement 6)
+ * Min duration: 1 Day, Max duration: 2 Months
+ */
+export async function reassignSalesUserDesignerTemporary(params: {
+  actor: UserProfile;
+  salesUser: UserProfile;
+  newDesigner: UserProfile;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+}): Promise<void> {
+  if (params.actor.role !== 'HEAD_OF_SALES' && params.actor.role !== 'ADMIN') {
+    throw new Error('Unauthorized: Only Head of Sales or Administrators can assign temporary Designers.');
+  }
+
+  if (!params.startDate || !params.endDate) {
+    throw new Error('Start date and end date are required.');
+  }
+
+  const startMs = new Date(params.startDate).getTime();
+  const endMs = new Date(params.endDate).getTime();
+
+  if (isNaN(startMs) || isNaN(endMs)) {
+    throw new Error('Please select valid start and end dates.');
+  }
+
+  if (endMs < startMs) {
+    throw new Error('End date must be on or after the start date.');
+  }
+
+  const diffDays = Math.round((endMs - startMs) / (1000 * 60 * 60 * 24)) + 1;
+  if (diffDays < 1) {
+    throw new Error('Minimum temporary assignment duration is 1 Day.');
+  }
+  if (diffDays > 62) {
+    throw new Error('Maximum temporary assignment duration is 2 Months.');
+  }
+
+  const nowIso = new Date().toISOString();
+  const prevDesignerId = params.salesUser.assignedDesignerId || '';
+  const prevDesignerName = params.salesUser.assignedDesignerName || 'Unassigned';
+
+  const tempAssignment = {
+    designerId: params.newDesigner.userId,
+    designerName: params.newDesigner.name,
+    startDate: params.startDate,
+    endDate: params.endDate,
+    assignedAt: nowIso,
+    assignedBy: params.actor.userId,
+    assignedByName: params.actor.name,
+    previousDesignerId: prevDesignerId,
+    previousDesignerName: prevDesignerName,
+  };
+
+  await updateDoc(doc(db, 'users', params.salesUser.userId), {
+    temporaryDesigner: tempAssignment,
+    updatedAt: nowIso,
+  });
+
+  await logAuditEvent({
+    action: 'TEMPORARY_DESIGNER_CHANGE',
+    performedBy: params.actor.userId,
+    performedByName: params.actor.name,
+    performedByRole: params.actor.role,
+    targetId: params.salesUser.userId,
+    targetType: 'User',
+    previousValue: `Original Designer: ${prevDesignerName}`,
+    newValue: `Temporary Designer: ${params.newDesigner.name} (${params.startDate} to ${params.endDate})`,
+  });
+
+  // Transfer all pending requests to the temporary designer
+  await transferPendingRequestsForSalesUser({
+    salesUserId: params.salesUser.userId,
+    salesUserName: params.salesUser.name,
+    newDesignerId: params.newDesigner.userId,
+    newDesignerName: params.newDesigner.name,
+    actorId: params.actor.userId,
+    actorName: params.actor.name,
+    reason: `Temporary reassignment from ${params.startDate} to ${params.endDate} (${diffDays} days)`,
+  });
+}
+
+/**
+ * Reverts an expired or cancelled temporary assignment back to original designer.
+ */
+export async function revertTemporaryDesigner(params: {
+  salesUser: UserProfile;
+  actor: UserProfile;
+}): Promise<void> {
+  const temp = params.salesUser.temporaryDesigner;
+  if (!temp) return;
+
+  const nowIso = new Date().toISOString();
+  await updateDoc(doc(db, 'users', params.salesUser.userId), {
+    temporaryDesigner: null,
+    updatedAt: nowIso,
+  });
+
+  const originalId = params.salesUser.assignedDesignerId || temp.previousDesignerId;
+  const originalName = params.salesUser.assignedDesignerName || temp.previousDesignerName;
+
+  if (originalId && originalName) {
+    await transferPendingRequestsForSalesUser({
+      salesUserId: params.salesUser.userId,
+      salesUserName: params.salesUser.name,
+      newDesignerId: originalId,
+      newDesignerName: originalName,
+      actorId: params.actor.userId,
+      actorName: params.actor.name,
+      reason: 'Temporary designer assignment expired; returned to original designer',
+    });
+  }
+}
+
 export async function createMockupRequest(params: {
   source: RequestSource;
   mockupTitle?: string | null;
   itemName?: string | null;
+  itemNames?: string[];
   clientName?: string | null;
   clientMobileNumber?: string | null;
   contactBy?: string | null;
-  notes: string;
+  notes?: string;
   referenceLinks?: string | null;
   additionalLinks?: string | null;
+  additionalReferenceLinks?: string[];
   attachments?: MockupRequest['attachments'];
   salesRepresentativeId: string;
   salesRepresentativeName: string;
@@ -176,18 +514,32 @@ export async function createMockupRequest(params: {
 
     const docRef = doc(db, 'mockupRequests', requestId);
 
+    const isGallabox = params.source === 'gallabox';
+    const rawItemNames = isGallabox
+      ? []
+      : params.itemNames && params.itemNames.length > 0
+      ? params.itemNames.filter((n) => n && n.trim())
+      : params.itemName ? [params.itemName.trim()] : [];
+
+    const primaryItemName = rawItemNames.length > 0 ? rawItemNames[0] : (params.itemName || null);
+    const rawRefLinks = params.additionalReferenceLinks && params.additionalReferenceLinks.length > 0
+      ? params.additionalReferenceLinks.filter((l) => l && l.trim())
+      : params.additionalLinks ? [params.additionalLinks.trim()] : [];
+
     const requestData: MockupRequest = {
       id: requestId,
       requestId,
       source: params.source,
-      mockupTitle: params.source === 'gallabox' ? null : params.mockupTitle || null,
-      itemName: params.source === 'gallabox' ? null : params.itemName || null,
+      mockupTitle: isGallabox ? null : params.mockupTitle || null,
+      itemName: isGallabox ? null : primaryItemName,
+      itemNames: isGallabox ? [] : rawItemNames,
       clientName: params.clientName || null,
       clientMobileNumber: params.clientMobileNumber || null,
-      contactBy: params.source === 'gallabox' ? null : params.contactBy || null,
-      notes: params.notes,
-      referenceLinks: params.source === 'gallabox' ? null : params.referenceLinks || null,
-      additionalLinks: params.source === 'gallabox' ? null : params.additionalLinks || null,
+      contactBy: isGallabox ? null : params.contactBy || null,
+      notes: params.notes || '',
+      referenceLinks: isGallabox ? null : params.referenceLinks || null,
+      additionalLinks: isGallabox ? null : (rawRefLinks.length > 0 ? rawRefLinks.join(' , ') : (params.additionalLinks || null)),
+      additionalReferenceLinks: isGallabox ? [] : rawRefLinks,
       attachments: params.attachments || [],
       salesRepresentativeId: params.salesRepresentativeId,
       salesRepresentativeName: params.salesRepresentativeName,
@@ -360,6 +712,9 @@ export async function requestMockupRevision(params: {
   salesRepresentativeId: string;
   salesRepresentativeName: string;
   changesDetails: string;
+  itemNames?: string[];
+  additionalReferenceLinks?: string[];
+  newAttachments?: MockupRequest['attachments'];
   timezone?: string;
 }): Promise<void> {
   const req = params.request;
@@ -381,9 +736,21 @@ export async function requestMockupRevision(params: {
 
   const nextRevNumber = (req.revisions?.length || 0) + 1;
 
+  const rawItemNames = params.itemNames && params.itemNames.length > 0
+    ? params.itemNames.filter((n) => n && n.trim())
+    : req.itemNames || (req.itemName ? [req.itemName] : []);
+
+  const rawAddLinks = params.additionalReferenceLinks && params.additionalReferenceLinks.length > 0
+    ? params.additionalReferenceLinks.filter((l) => l && l.trim())
+    : req.additionalReferenceLinks || [];
+
   const newRevision: import('../types').RequestRevision = {
     revisionNumber: nextRevNumber,
     changesDetails: params.changesDetails.trim(),
+    itemNames: rawItemNames,
+    itemName: rawItemNames.length > 0 ? rawItemNames[0] : req.itemName,
+    additionalReferenceLinks: rawAddLinks,
+    attachments: params.newAttachments || [],
     requestedAt: nowIso,
     requestedDate,
     requestedTime,
@@ -397,6 +764,12 @@ export async function requestMockupRevision(params: {
   };
 
   const updatedRevisions = [...(req.revisions || []), newRevision];
+
+  // Merge any new attachments into the request's attachments list
+  const combinedAttachments = [
+    ...(req.attachments || []),
+    ...(params.newAttachments || []),
+  ];
 
   const updatedTimeline = [
     ...(req.timeline || []),
@@ -415,6 +788,11 @@ export async function requestMockupRevision(params: {
       status: 'PENDING',
       currentRevision: nextRevNumber,
       latestChangesDetails: params.changesDetails.trim(),
+      itemNames: rawItemNames,
+      itemName: rawItemNames.length > 0 ? rawItemNames[0] : req.itemName,
+      additionalReferenceLinks: rawAddLinks,
+      additionalLinks: rawAddLinks.length > 0 ? rawAddLinks.join(' , ') : req.additionalLinks,
+      attachments: combinedAttachments,
       completedAt: null,
       completedDate: null,
       completedTime: null,
@@ -511,6 +889,141 @@ export async function rejectMockupRequest(params: {
       targetType: 'MockupRequest',
       previousValue: 'PENDING',
       newValue: `REJECTED: ${params.rejectionReason.trim()}`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `mockupRequests/${req.id}`);
+  }
+}
+
+/**
+ * Designer sends request back to Sales User for corrections/additional info (Requirement 14).
+ * Retains exact same Request ID.
+ */
+export async function requestBackMockup(params: {
+  request: MockupRequest;
+  designerId: string;
+  designerName: string;
+  reason: string;
+}): Promise<void> {
+  const req = params.request;
+  if (!params.reason || !params.reason.trim()) {
+    throw new Error('Please provide the instructions / reason for requesting back.');
+  }
+
+  const nowIso = new Date().toISOString();
+  const updatedTimeline = [
+    ...(req.timeline || []),
+    {
+      action: 'Returned to Sales (Request Back)',
+      timestamp: nowIso,
+      performedBy: params.designerId,
+      performedByName: params.designerName,
+      performedByRole: 'DESIGNER',
+      note: params.reason.trim(),
+    },
+  ];
+
+  try {
+    await updateDoc(doc(db, 'mockupRequests', req.id), {
+      status: 'REQUEST_BACK',
+      requestBackAt: nowIso,
+      requestBackBy: params.designerId,
+      requestBackByName: params.designerName,
+      requestBackReason: params.reason.trim(),
+      updatedAt: nowIso,
+      timeline: updatedTimeline,
+    });
+
+    await createNotification({
+      userId: req.salesRepresentativeId,
+      title: `Request ${req.requestId} Returned for Updates`,
+      message: `Designer ${params.designerName} requested corrections/updates on request ${req.requestId}. Reason: ${params.reason.trim()}`,
+      type: 'REQUEST_BACK',
+      requestId: req.requestId,
+    });
+
+    await logAuditEvent({
+      action: 'REQUEST_BACK',
+      performedBy: params.designerId,
+      performedByName: params.designerName,
+      performedByRole: 'DESIGNER',
+      targetId: req.requestId,
+      targetType: 'MockupRequest',
+      previousValue: 'PENDING',
+      newValue: `REQUEST_BACK: ${params.reason.trim()}`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `mockupRequests/${req.id}`);
+  }
+}
+
+/**
+ * Sales Representative edits and resubmits a returned request (Requirement 14).
+ * Retains the exact same Request ID and audit history.
+ */
+export async function resubmitReturnedRequest(params: {
+  request: MockupRequest;
+  salesRepresentativeId: string;
+  salesRepresentativeName: string;
+  updatedFields: {
+    itemNames?: string[];
+    notes?: string;
+    additionalReferenceLinks?: string[];
+    attachments?: MockupRequest['attachments'];
+  };
+}): Promise<void> {
+  const req = params.request;
+  const nowIso = new Date().toISOString();
+
+  const itemNames = params.updatedFields.itemNames || req.itemNames || (req.itemName ? [req.itemName] : []);
+  const itemName = itemNames.length > 0 ? itemNames[0] : req.itemName;
+  const addLinks = params.updatedFields.additionalReferenceLinks || req.additionalReferenceLinks || [];
+  const additionalLinks = addLinks.length > 0 ? addLinks.join(' , ') : req.additionalLinks;
+
+  const updatedTimeline = [
+    ...(req.timeline || []),
+    {
+      action: 'Corrected & Resubmitted by Sales',
+      timestamp: nowIso,
+      performedBy: params.salesRepresentativeId,
+      performedByName: params.salesRepresentativeName,
+      performedByRole: 'SALES_REPRESENTATIVE',
+      note: 'Updated details provided by Sales Representative',
+    },
+  ];
+
+  try {
+    await updateDoc(doc(db, 'mockupRequests', req.id), {
+      itemNames,
+      itemName,
+      notes: params.updatedFields.notes !== undefined ? params.updatedFields.notes : req.notes,
+      additionalReferenceLinks: addLinks,
+      additionalLinks,
+      attachments: params.updatedFields.attachments || req.attachments || [],
+      status: 'PENDING',
+      requestBackAt: null,
+      requestBackReason: null,
+      updatedAt: nowIso,
+      timeline: updatedTimeline,
+    });
+
+    await createNotification({
+      userId: req.designerId,
+      title: 'Mockup Request Resubmitted',
+      message: `${params.salesRepresentativeName} corrected and resubmitted request ${req.requestId}`,
+      type: 'REQUEST_RESUBMITTED',
+      requestId: req.requestId,
+    });
+
+    await logAuditEvent({
+      action: 'REQUEST_RESUBMITTED_AFTER_BACK',
+      performedBy: params.salesRepresentativeId,
+      performedByName: params.salesRepresentativeName,
+      performedByRole: 'SALES_REPRESENTATIVE',
+      targetId: req.requestId,
+      targetType: 'MockupRequest',
+      previousValue: 'REQUEST_BACK',
+      newValue: 'PENDING',
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `mockupRequests/${req.id}`);

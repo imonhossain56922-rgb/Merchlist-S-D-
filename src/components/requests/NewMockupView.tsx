@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { UserProfile, RequestSource, RequestPriority, DesignerCapacity } from '../../types';
-import { createMockupRequest, getDesignerCapacity } from '../../services/requestService';
+import {
+  createMockupRequest,
+  getDesignerCapacity,
+  getActiveDesignerForSalesUser,
+  getDesignerPriorityWarning,
+} from '../../services/requestService';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import {
@@ -19,8 +24,11 @@ import {
   User,
   Phone,
   Tag,
-  Layers,
   ArrowLeft,
+  Loader2,
+  Plus,
+  Calendar,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface NewMockupViewProps {
@@ -38,87 +46,118 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
   onComplete,
   onCancel,
 }) => {
-  const [source, setSource] = useState<RequestSource>('whatsapp');
-  const [priority, setPriority] = useState<RequestPriority>('REGULAR');
+  // Active designer considering temporary assignment
+  const activeAssignment = useMemo(() => {
+    return getActiveDesignerForSalesUser(currentUser);
+  }, [currentUser]);
+
+  // Form input state variables
   const [mockupTitle, setMockupTitle] = useState('');
-  const [itemName, setItemName] = useState('');
+  const [items, setItems] = useState<string[]>(['']);
   const [clientName, setClientName] = useState('');
   const [clientMobileNumber, setClientMobileNumber] = useState('');
-  const [contactBy, setContactBy] = useState('');
+  const [contactBy, setContactBy] = useState('WhatsApp');
   const [notes, setNotes] = useState('');
-  const [referenceLinks, setReferenceLinks] = useState('');
-  const [additionalLinks, setAdditionalLinks] = useState('');
+  const [refLinks, setRefLinks] = useState<string[]>(['']);
+  const [source, setSource] = useState<RequestSource>('whatsapp');
+  const [priority, setPriority] = useState<RequestPriority>('REGULAR');
+  const [priorityWarning, setPriorityWarning] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<
     Array<{ id: string; name: string; url: string; size: number; type: string; uploadedAt: string }>
   >([]);
 
+  // Designer loading state
   const [availableDesigners, setAvailableDesigners] = useState<UserProfile[]>([]);
+  const [selectedDesignerId, setSelectedDesignerId] = useState<string>(() => {
+    return activeAssignment.designerId || currentUser.assignedDesignerId || '';
+  });
+  const [capacity, setCapacity] = useState<DesignerCapacity | null>(null);
 
-  // Keep available designers updated from props or query Firestore if empty
+  // Submission feedback
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
+  // 1. Load active designers reliably (from props or direct Firestore query)
   useEffect(() => {
+    let isMounted = true;
     const fromProps = allUsers.filter((u) => u.role === 'DESIGNER' && u.active && !u.deleted);
     if (fromProps.length > 0) {
       setAvailableDesigners(fromProps);
     } else {
       getDocs(query(collection(db, 'users'), where('role', '==', 'DESIGNER')))
         .then((snap) => {
+          if (!isMounted) return;
           const list = snap.docs
             .map((d) => d.data() as UserProfile)
             .filter((u) => u.active && !u.deleted);
           setAvailableDesigners(list);
         })
-        .catch((err) => console.warn('Failed to load designers in NewMockupView:', err));
+        .catch((err) => console.warn('Designer fetch warning:', err));
     }
+    return () => {
+      isMounted = false;
+    };
   }, [allUsers]);
 
-  const [selectedDesignerId, setSelectedDesignerId] = useState<string>(() => {
-    return currentUser.assignedDesignerId || '';
-  });
-
-  // Automatically select assigned designer or first available designer
+  // 2. Default to active assigned designer or first designer once loaded
   useEffect(() => {
-    if (!selectedDesignerId || !availableDesigners.some((d) => d.userId === selectedDesignerId)) {
-      if (currentUser.assignedDesignerId && availableDesigners.some((d) => d.userId === currentUser.assignedDesignerId)) {
-        setSelectedDesignerId(currentUser.assignedDesignerId);
-      } else if (availableDesigners.length > 0) {
+    const targetId = activeAssignment.designerId || currentUser.assignedDesignerId;
+    if (!selectedDesignerId && availableDesigners.length > 0) {
+      const match = availableDesigners.find((d) => d.userId === targetId);
+      if (match) {
+        setSelectedDesignerId(match.userId);
+      } else {
         setSelectedDesignerId(availableDesigners[0].userId);
       }
     }
-  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId]);
+  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId, activeAssignment]);
 
+  // Find currently selected designer profile
   const selectedDesigner = useMemo(() => {
     return (
       availableDesigners.find((d) => d.userId === selectedDesignerId) ||
-      allUsers.find((u) => u.userId === selectedDesignerId)
+      allUsers.find((u) => u.userId === selectedDesignerId) ||
+      null
     );
   }, [availableDesigners, allUsers, selectedDesignerId]);
 
-  const [capacity, setCapacity] = useState<DesignerCapacity | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-
-  // Load Designer capacity
+  // 3. Load designer workload capacity
   useEffect(() => {
-    const designerId = selectedDesignerId || currentUser.assignedDesignerId;
+    const designerId = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId;
     if (designerId) {
-      getDesignerCapacity(designerId, selectedDesigner?.name || currentUser.assignedDesignerName).then(
-        (cap) => {
+      getDesignerCapacity(designerId, selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName || '')
+        .then((cap) => {
           setCapacity(cap);
-        }
-      );
+        })
+        .catch(() => {});
     }
-  }, [selectedDesignerId, currentUser.assignedDesignerId, selectedDesigner?.name]);
+  }, [selectedDesignerId, activeAssignment, currentUser.assignedDesignerName, selectedDesigner?.name]);
 
-  const isGallabox = source === 'gallabox';
+  // 4. Check priority warning for urgent requests
+  useEffect(() => {
+    const designerId = selectedDesignerId || activeAssignment.designerId;
+    if (designerId && (priority === 'URGENT' || priority === 'SUPER_URGENT')) {
+      getDesignerPriorityWarning(designerId, priority).then((warn) => {
+        if (warn.hasWarning && warn.warningMessage) {
+          setPriorityWarning(warn.warningMessage);
+        } else {
+          setPriorityWarning(null);
+        }
+      });
+    } else {
+      setPriorityWarning(null);
+    }
+  }, [selectedDesignerId, activeAssignment.designerId, priority]);
 
+  // Handle file uploads
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
     Array.from(files).forEach((file) => {
       if (file.size > 15 * 1024 * 1024) {
-        setErrorMessage('File size exceeds 15MB limit.');
+        setErrorMessage('Each attachment file must be under 15MB.');
         return;
       }
       const reader = new FileReader();
@@ -127,7 +166,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
         setAttachments((prev) => [
           ...prev,
           {
-            id: `ATT_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            id: `ATT_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
             name: file.name,
             url,
             size: file.size,
@@ -138,71 +177,82 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
       };
       reader.readAsDataURL(file);
     });
+
+    if (e.target) {
+      e.target.value = '';
+    }
   };
 
   const removeAttachment = (id: string) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  // Form Submission
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
 
-    const designerIdToUse = selectedDesignerId || currentUser.assignedDesignerId;
+    const isGallabox = source === 'gallabox';
+    const validItems = items.map((i) => i.trim()).filter(Boolean);
+    const validLinks = refLinks.map((l) => l.trim()).filter(Boolean);
+
+    // Validation
+    if (!isGallabox && !mockupTitle.trim()) {
+      setErrorMessage('Please enter the Mockup Title.');
+      return;
+    }
+    if (!isGallabox && validItems.length === 0) {
+      setErrorMessage('Please enter at least one Item / Product Name.');
+      return;
+    }
+
+    const designerIdToUse = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId || availableDesigners[0]?.userId;
     const designerNameToUse =
-      selectedDesigner?.name || currentUser.assignedDesignerName || 'Assigned Designer';
+      selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName || availableDesigners[0]?.name || 'Assigned Designer';
 
     if (!designerIdToUse) {
-      setErrorMessage(
-        'Please select a Designer for this mockup request. If no designers are listed, contact an Administrator.'
-      );
+      setErrorMessage('No designer found in the system. Please ensure an active designer exists.');
       return;
     }
 
-    if (!notes.trim()) {
-      setErrorMessage('Notes / Instructions are required.');
-      return;
-    }
-
-    if (!isGallabox) {
-      if (!mockupTitle.trim()) {
-        setErrorMessage('Mockup Title is required.');
-        return;
-      }
-      if (!itemName.trim()) {
-        setErrorMessage('Item / Product Name is required.');
-        return;
-      }
-    }
-
-    // Capacity guardrails
+    // Capacity checks
     if (priority === 'SUPER_URGENT' && capacity && !capacity.canAcceptSuperUrgent) {
       setErrorMessage(
-        'The assigned Designer currently has an active Super Urgent request (Max 1). Please wait or choose another priority.'
+        'The assigned Designer currently has an active Super Urgent request. Please wait until completed or choose Urgent / Regular.'
       );
       return;
     }
 
     if (priority === 'URGENT' && capacity && !capacity.canAcceptUrgent) {
       setErrorMessage(
-        'The assigned Designer currently has maximum active Urgent requests (Max 2). Please wait or use Regular priority.'
+        'The assigned Designer currently has the maximum (2) active Urgent requests. Please select Regular priority or wait until completed.'
       );
       return;
     }
 
     setIsSubmitting(true);
     try {
+      const finalTitle = isGallabox
+        ? mockupTitle.trim() || `Gallabox - ${clientName.trim() || 'Request'}`
+        : mockupTitle.trim();
+
+      const finalItem = validItems.length > 0
+        ? validItems.join(', ')
+        : (isGallabox ? 'Merchlist Mockup' : 'Custom Merchandise');
+
       await createMockupRequest({
         source,
         priority,
-        mockupTitle: isGallabox ? null : mockupTitle.trim(),
-        itemName: isGallabox ? null : itemName.trim(),
+        mockupTitle: finalTitle,
+        itemName: finalItem,
+        itemNames: validItems.length > 0 ? validItems : [finalItem],
         clientName: clientName.trim() || null,
         clientMobileNumber: clientMobileNumber.trim() || null,
-        contactBy: isGallabox ? null : contactBy.trim() || null,
+        contactBy: contactBy.trim() || null,
         notes: notes.trim(),
-        referenceLinks: isGallabox ? null : referenceLinks.trim() || null,
-        additionalLinks: isGallabox ? null : additionalLinks.trim() || null,
+        referenceLinks: validLinks[0] || null,
+        additionalLinks: validLinks[1] || null,
+        additionalReferenceLinks: validLinks,
         attachments,
         salesRepresentativeId: currentUser.userId,
         salesRepresentativeName: currentUser.name,
@@ -211,281 +261,228 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
         timezone,
       });
 
-      setSuccessMessage('Mockup Request created successfully! Assigned to Designer.');
+      setSuccessMessage('Mockup Request created successfully! Redirecting...');
       setTimeout(() => {
         onComplete();
-      }, 1000);
+      }, 700);
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Failed to create mockup request.');
-    } finally {
       setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      {/* Page Header */}
+    <div className="max-w-4xl mx-auto space-y-6 pb-12">
+      {/* Top Banner & Header */}
       <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            {onCancel && (
-              <button
-                type="button"
-                onClick={onCancel}
-                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors mr-1"
-                title="Back"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-            )}
-            <span className="p-2 rounded-xl bg-cyan-50 text-cyan-800">
-              <FilePlus2 className="w-5 h-5 text-cyan-700" />
-            </span>
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0c192c] tracking-tight">
-                Create New Mockup Request
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Fill in the client brief and specifications. All inputs can be easily copied by designers.
-              </p>
-            </div>
+        <div className="flex items-center gap-3">
+          {onCancel && (
+            <button
+              type="button"
+              onClick={onCancel}
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+              title="Back"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          )}
+          <span className="p-2.5 rounded-xl bg-cyan-50 text-cyan-800">
+            <FilePlus2 className="w-6 h-6 text-cyan-700" />
+          </span>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-[#0c192c] tracking-tight">
+              New Mockup Request
+            </h1>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Fill in the client brief and specifications for the design team.
+            </p>
           </div>
         </div>
 
-        {/* Assigned Designer Indicator */}
-        <div className="p-3 bg-cyan-50/70 border border-cyan-200/80 rounded-xl flex items-center gap-3">
-          <Palette className="w-5 h-5 text-cyan-700 flex-shrink-0" />
-          <div className="text-left text-xs">
-            <span className="text-[10px] text-cyan-700 font-semibold uppercase tracking-wider block">
-              Assigned Designer
+        {/* Sales Rep Identity Badge */}
+        <div className="px-3.5 py-2 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2.5 self-start sm:self-auto text-xs">
+          <User className="w-4 h-4 text-cyan-700 flex-shrink-0" />
+          <div>
+            <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block">
+              Sales Representative
             </span>
-            <span className="font-bold text-slate-900 block">
-              {selectedDesigner?.name || currentUser.assignedDesignerName || 'None Assigned'}
+            <span className="font-bold text-slate-900 block truncate max-w-[180px]">
+              {currentUser.name}
             </span>
           </div>
         </div>
       </div>
 
       {/* Main Form */}
-      <form onSubmit={handleSubmit} className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200/80 shadow-xs space-y-6">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Error notification */}
         {errorMessage && (
-          <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-3 text-xs text-rose-800 animate-in fade-in">
+          <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 flex items-start gap-3 text-xs text-rose-800 shadow-2xs">
             <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Unable to submit request</p>
+            <div className="flex-1">
+              <p className="font-bold">Required Information Missing</p>
               <p className="mt-0.5">{errorMessage}</p>
             </div>
           </div>
         )}
 
+        {/* Success notification */}
         {successMessage && (
-          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3 text-xs text-emerald-800 animate-in fade-in">
+          <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 flex items-start gap-3 text-xs text-emerald-800 shadow-2xs">
             <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="font-semibold">Success!</p>
+            <div className="flex-1">
+              <p className="font-bold">Success!</p>
               <p className="mt-0.5">{successMessage}</p>
             </div>
           </div>
         )}
 
-        {/* Designer Selector */}
-        <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-          <div className="flex items-center justify-between">
-            <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
-              <Palette className="w-3.5 h-3.5 text-cyan-700" />
-              <span>Select Designer to Assign</span> <span className="text-rose-500">*</span>
-            </label>
-            {selectedDesigner && (
-              <span className="text-[11px] text-slate-500 font-mono">
-                ID: {selectedDesigner.loginId}
-              </span>
-            )}
-          </div>
-          <select
-            value={selectedDesignerId}
-            onChange={(e) => setSelectedDesignerId(e.target.value)}
-            required
-            className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 bg-white text-slate-900 text-xs font-semibold focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-          >
-            <option value="">-- Choose Assigned Designer --</option>
-            {availableDesigners.map((d) => (
-              <option key={d.userId} value={d.userId}>
-                {d.name} (ID: {d.loginId})
-              </option>
-            ))}
-          </select>
-        </div>
-
-        {/* 1. Request Source */}
-        <div>
-          <label className="block text-xs font-bold text-slate-800 mb-2">
-            Request Source <span className="text-rose-500">*</span>
-          </label>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-            {[
-              { id: 'whatsapp', label: 'WhatsApp', color: 'hover:border-emerald-500 text-emerald-700' },
-              { id: 'gallabox', label: 'Gallabox', color: 'hover:border-cyan-500 text-cyan-700' },
-              { id: 'email', label: 'Email', color: 'hover:border-blue-500 text-blue-700' },
-              { id: 'others', label: 'Others', color: 'hover:border-purple-500 text-purple-700' },
-            ].map((s) => {
-              const isSelected = source === s.id;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => setSource(s.id as RequestSource)}
-                  className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                    isSelected
-                      ? 'bg-[#0c192c] text-white border-[#0c192c] shadow-xs'
-                      : `bg-slate-50/80 text-slate-700 border-slate-200 ${s.color}`
-                  }`}
-                >
-                  <span>{s.label}</span>
-                  {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400" />}
-                </button>
-              );
-            })}
-          </div>
-          {isGallabox && (
-            <p className="text-[11px] text-cyan-700 mt-2 bg-cyan-50/80 p-2.5 rounded-lg border border-cyan-200">
-              Gallabox orders only require Notes/Instructions and optional Client details. Title & Item Name are automated.
-            </p>
-          )}
-        </div>
-
-        {/* 2. Priority Selection & Live Capacity */}
-        <div className="p-4 rounded-xl bg-slate-50/80 border border-slate-200 space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <label className="block text-xs font-bold text-slate-800">
-              Priority Level <span className="text-rose-500">*</span>
-            </label>
-            {capacity && (
-              <div className="flex items-center gap-3 text-[11px]">
-                <span
-                  className={`px-2 py-0.5 rounded font-bold ${
-                    capacity.canAcceptSuperUrgent
-                      ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-rose-100 text-rose-800'
-                  }`}
-                >
-                  Super Urgent: {capacity.superUrgentCount}/{capacity.superUrgentMax}
-                </span>
-                <span
-                  className={`px-2 py-0.5 rounded font-bold ${
-                    capacity.canAcceptUrgent
-                      ? 'bg-amber-100 text-amber-800'
-                      : 'bg-rose-100 text-rose-800'
-                  }`}
-                >
-                  Urgent: {capacity.urgentCount}/{capacity.urgentMax}
-                </span>
-              </div>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Regular */}
-            <button
-              type="button"
-              onClick={() => setPriority('REGULAR')}
-              className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
-                priority === 'REGULAR'
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                  : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-xs">Regular</span>
-                <Clock className="w-3.5 h-3.5 text-slate-400" />
-              </div>
-              <p className={`text-[10px] ${priority === 'REGULAR' ? 'text-slate-300' : 'text-slate-500'}`}>
-                Standard queue workflow
+        {/* Temporary Coverage Banner if active */}
+        {activeAssignment.isTemporary && (
+          <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-3 shadow-2xs">
+            <Calendar className="w-5 h-5 text-amber-700 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <h4 className="font-bold text-xs uppercase tracking-wider text-amber-900">
+                Temporary Designer Coverage Active
+              </h4>
+              <p className="text-xs text-amber-800 mt-0.5 leading-relaxed">
+                Your requests are temporarily being routed to <strong>{activeAssignment.designerName}</strong> until <strong>{activeAssignment.endDate}</strong> (covering for your primary designer, <strong>{activeAssignment.originalDesignerName}</strong>).
               </p>
-            </button>
-
-            {/* Urgent */}
-            <button
-              type="button"
-              disabled={capacity ? !capacity.canAcceptUrgent : false}
-              onClick={() => setPriority('URGENT')}
-              className={`p-3 rounded-xl border text-left transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                priority === 'URGENT'
-                  ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-xs'
-                  : 'bg-white text-slate-800 border-slate-200 hover:border-amber-400'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-xs">Urgent</span>
-                <Zap className="w-3.5 h-3.5 text-amber-600" />
-              </div>
-              <p className={`text-[10px] ${priority === 'URGENT' ? 'text-slate-900 font-medium' : 'text-slate-500'}`}>
-                Max 2 per designer
-              </p>
-            </button>
-
-            {/* Super Urgent */}
-            <button
-              type="button"
-              disabled={capacity ? !capacity.canAcceptSuperUrgent : false}
-              onClick={() => setPriority('SUPER_URGENT')}
-              className={`p-3 rounded-xl border text-left transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
-                priority === 'SUPER_URGENT'
-                  ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
-                  : 'bg-white text-slate-800 border-slate-200 hover:border-rose-400'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1">
-                <span className="font-bold text-xs">Super Urgent</span>
-                <ShieldAlert className="w-3.5 h-3.5 text-rose-500" />
-              </div>
-              <p className={`text-[10px] ${priority === 'SUPER_URGENT' ? 'text-rose-100 font-medium' : 'text-slate-500'}`}>
-                Max 1 per designer
-              </p>
-            </button>
-          </div>
-        </div>
-
-        {/* 3. Client Specifications (Title, Item, Client Name, Mobile, Contact By) */}
-        <div className="space-y-4">
-          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider border-b border-slate-100 pb-2">
-            Client & Order Details
-          </h3>
-
-          {!isGallabox && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Mockup Title <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={mockupTitle}
-                  onChange={(e) => setMockupTitle(e.target.value)}
-                  placeholder="e.g. Corporate Polo Branding"
-                  required={!isGallabox}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Item / Product Name <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={itemName}
-                  onChange={(e) => setItemName(e.target.value)}
-                  placeholder="e.g. Black Dry-Fit Polo Shirt"
-                  required={!isGallabox}
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                />
-              </div>
             </div>
-          )}
+          </div>
+        )}
+
+        {/* ================= SECTION 1: ORDER SPECIFICATIONS ================= */}
+        <div className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <Tag className="w-4 h-4 text-cyan-700" />
+            <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+              1. Mockup & Product Specifications
+            </h2>
+          </div>
+
+          <div className="space-y-4">
+            {/* Mockup Title */}
+            <div>
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                Mockup Title {source !== 'gallabox' && <span className="text-rose-500">*</span>}
+              </label>
+              <input
+                type="text"
+                value={mockupTitle}
+                onChange={(e) => setMockupTitle(e.target.value)}
+                placeholder="e.g. Corporate Merchandise Collection - Acme Corp"
+                required={source !== 'gallabox'}
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
+              />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Short title to identify this mockup in the designer queue.
+              </span>
+            </div>
+
+            {/* Multiple Items / Products */}
+            <div className="space-y-2.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-slate-800">
+                  Item(s) / Product(s) {source !== 'gallabox' && <span className="text-rose-500">*</span>}
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setItems((prev) => [...prev, ''])}
+                  className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Another Item</span>
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {items.map((item, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <span className="w-7 text-center text-xs font-bold text-slate-400 font-mono">
+                      #{idx + 1}
+                    </span>
+                    <input
+                      type="text"
+                      value={item}
+                      onChange={(e) => {
+                        const next = [...items];
+                        next[idx] = e.target.value;
+                        setItems(next);
+                      }}
+                      placeholder={idx === 0 ? "e.g. Black Dry-Fit Polo Shirt with Embroidery" : `Item #${idx + 1} name or description`}
+                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
+                    />
+                    {items.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}
+                        className="p-2 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                        title="Remove item"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <span className="text-[11px] text-slate-400 block">
+                Specify all products or apparel articles included in this mockup job.
+              </span>
+            </div>
+          </div>
+
+          {/* Request Source Selector */}
+          <div>
+            <label className="block text-xs font-bold text-slate-800 mb-2">
+              Request Source <span className="text-rose-500">*</span>
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              {[
+                { id: 'whatsapp', label: 'WhatsApp', color: 'hover:border-emerald-500 text-emerald-700' },
+                { id: 'gallabox', label: 'Gallabox', color: 'hover:border-cyan-500 text-cyan-700' },
+                { id: 'email', label: 'Email', color: 'hover:border-blue-500 text-blue-700' },
+                { id: 'others', label: 'Others', color: 'hover:border-purple-500 text-purple-700' },
+              ].map((s) => {
+                const isSelected = source === s.id;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => {
+                      setSource(s.id as RequestSource);
+                      if (s.id === 'whatsapp') setContactBy('WhatsApp');
+                      else if (s.id === 'gallabox') setContactBy('Gallabox');
+                      else if (s.id === 'email') setContactBy('Email');
+                    }}
+                    className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                      isSelected
+                        ? 'bg-[#0c192c] text-white border-[#0c192c] shadow-xs'
+                        : `bg-slate-50 text-slate-700 border-slate-200 ${s.color}`
+                    }`}
+                  >
+                    <span>{s.label}</span>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* ================= SECTION 2: CLIENT & CONTACT ================= */}
+        <div className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <User className="w-4 h-4 text-cyan-700" />
+            <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+              2. Client & Contact Information
+            </h2>
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Client Name */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
                 Client Name
               </label>
               <input
@@ -493,12 +490,16 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
                 placeholder="e.g. Acme Corp / John"
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
               />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Company name or contact person.
+              </span>
             </div>
 
+            {/* Client Mobile Number */}
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
                 Client Mobile Number
               </label>
               <input
@@ -506,141 +507,336 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 value={clientMobileNumber}
                 onChange={(e) => setClientMobileNumber(e.target.value)}
                 placeholder="e.g. +971 50 123 4567"
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs font-mono focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm font-mono focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
               />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                Phone with country code for designer reference.
+              </span>
             </div>
 
-            {!isGallabox && (
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                  Contact By
-                </label>
-                <input
-                  type="text"
-                  value={contactBy}
-                  onChange={(e) => setContactBy(e.target.value)}
-                  placeholder="e.g. WhatsApp / Phone / Email"
-                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                />
+            {/* Contact Method */}
+            <div>
+              <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                Preferred Contact Method
+              </label>
+              <input
+                type="text"
+                value={contactBy}
+                onChange={(e) => setContactBy(e.target.value)}
+                placeholder="e.g. WhatsApp / Phone / Email"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
+              />
+              <span className="text-[11px] text-slate-400 mt-1 block">
+                How client was contacted.
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* ================= SECTION 3: PRIORITY & DESIGNER ASSIGNMENT ================= */}
+        <div className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <Palette className="w-4 h-4 text-cyan-700" />
+            <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+              3. Priority & Designer Assignment
+            </h2>
+          </div>
+
+          {/* Priority Selection Cards */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs font-bold text-slate-800">
+                Priority Level <span className="text-rose-500">*</span>
+              </label>
+              {capacity && (
+                <div className="flex items-center gap-2 text-[11px] font-semibold">
+                  <span className="text-slate-500">Active Queue:</span>
+                  <span className="text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200">
+                    Super Urgent: {capacity.superUrgentCount}/{capacity.superUrgentMax}
+                  </span>
+                  <span className="text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
+                    Urgent: {capacity.urgentCount}/{capacity.urgentMax}
+                  </span>
+                </div>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Regular */}
+              <button
+                type="button"
+                onClick={() => setPriority('REGULAR')}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                  priority === 'REGULAR'
+                    ? 'bg-[#0c192c] text-white border-[#0c192c] shadow-xs ring-2 ring-[#0c192c]/20'
+                    : 'bg-white text-slate-800 border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-xs">Regular Priority</span>
+                  <Clock className={`w-4 h-4 ${priority === 'REGULAR' ? 'text-cyan-400' : 'text-slate-400'}`} />
+                </div>
+                <p className={`text-[11px] ${priority === 'REGULAR' ? 'text-slate-300' : 'text-slate-500'}`}>
+                  Standard production queue workflow.
+                </p>
+              </button>
+
+              {/* Urgent */}
+              <button
+                type="button"
+                onClick={() => setPriority('URGENT')}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                  priority === 'URGENT'
+                    ? 'bg-amber-500 text-slate-950 border-amber-500 shadow-xs ring-2 ring-amber-400/40'
+                    : 'bg-white text-slate-800 border-slate-200 hover:border-amber-400'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-xs">Urgent (Max 2)</span>
+                  <Zap className={`w-4 h-4 ${priority === 'URGENT' ? 'text-slate-950' : 'text-amber-600'}`} />
+                </div>
+                <p className={`text-[11px] ${priority === 'URGENT' ? 'text-slate-900 font-medium' : 'text-slate-500'}`}>
+                  Fast-track queue for confirmed priority orders.
+                </p>
+              </button>
+
+              {/* Super Urgent */}
+              <button
+                type="button"
+                onClick={() => setPriority('SUPER_URGENT')}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer ${
+                  priority === 'SUPER_URGENT'
+                    ? 'bg-rose-600 text-white border-rose-600 shadow-xs ring-2 ring-rose-400/40'
+                    : 'bg-white text-slate-800 border-slate-200 hover:border-rose-400'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-xs">Super Urgent (Max 1)</span>
+                  <ShieldAlert className={`w-4 h-4 ${priority === 'SUPER_URGENT' ? 'text-white' : 'text-rose-600'}`} />
+                </div>
+                <p className={`text-[11px] ${priority === 'SUPER_URGENT' ? 'text-rose-100 font-medium' : 'text-slate-500'}`}>
+                  Immediate top-of-queue priority execution.
+                </p>
+              </button>
+            </div>
+
+            {/* Inline Turnaround Advisory / Priority Warning */}
+            {priorityWarning && (
+              <div className="mt-3 p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2.5 shadow-2xs animate-in fade-in">
+                <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <span className="font-bold block text-amber-950">Turnaround Advisory</span>
+                  <span className="mt-0.5 block">{priorityWarning}</span>
+                </div>
               </div>
             )}
           </div>
-        </div>
 
-        {/* 4. Notes / Instructions */}
-        <div>
-          <label className="block text-xs font-bold text-slate-800 mb-1.5">
-            Notes / Design Instructions <span className="text-rose-500">*</span>
-          </label>
-          <textarea
-            rows={4}
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            required
-            placeholder="Detailed instructions: logo placement, dimensions, pantone colors, mock specs..."
-            className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none leading-relaxed"
-          />
-        </div>
-
-        {/* 5. Reference Links */}
-        {!isGallabox && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Reference Link (Drive / Dropbox)
+          {/* Designer Selector */}
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                <Palette className="w-4 h-4 text-cyan-700" />
+                <span>Assigned Designer</span>
+                <span className="text-rose-500">*</span>
               </label>
-              <input
-                type="url"
-                value={referenceLinks}
-                onChange={(e) => setReferenceLinks(e.target.value)}
-                placeholder="https://drive.google.com/..."
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-              />
+              {selectedDesigner && (
+                <span className="text-xs font-mono font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                  ID: {selectedDesigner.loginId}
+                </span>
+              )}
             </div>
 
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-                Additional Reference Link
-              </label>
-              <input
-                type="url"
-                value={additionalLinks}
-                onChange={(e) => setAdditionalLinks(e.target.value)}
-                placeholder="https://..."
-                className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-              />
-            </div>
+            <select
+              value={selectedDesignerId}
+              onChange={(e) => setSelectedDesignerId(e.target.value)}
+              required
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-semibold focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+            >
+              <option value="">-- Choose Assigned Designer --</option>
+              {availableDesigners.map((d) => (
+                <option key={d.userId} value={d.userId}>
+                  {d.name} (Login ID: {d.loginId})
+                </option>
+              ))}
+            </select>
+            <p className="text-[11px] text-slate-500">
+              The mockup request will be added directly to this designer's priority queue and they will receive an in-app notification.
+            </p>
           </div>
-        )}
+        </div>
 
-        {/* 6. File Attachments */}
-        <div>
-          <label className="block text-xs font-bold text-slate-800 mb-2">
-            File Attachments (Logos, Vectors, References)
-          </label>
-          <div className="border-2 border-dashed border-slate-300 hover:border-cyan-500 rounded-xl p-4 text-center bg-slate-50 transition-colors">
+        {/* ================= SECTION 4: INSTRUCTIONS & LINKS ================= */}
+        <div className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/80 shadow-xs space-y-5">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <FileText className="w-4 h-4 text-cyan-700" />
+            <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+              4. Design Instructions & Reference Links
+            </h2>
+          </div>
+
+          {/* Notes / Instructions (Optional) */}
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="block text-xs font-bold text-slate-800">
+                Notes / Design Instructions <span className="text-slate-400 font-normal">(Optional)</span>
+              </label>
+            </div>
+            <textarea
+              rows={4}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="Enter detailed design instructions: logo placement, dimensions, pantone color codes, mockup angles, text customizations..."
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 leading-relaxed font-sans bg-white"
+            />
+            <span className="text-[11px] text-slate-400 mt-1 block">
+              Designers can copy these instructions with a single click.
+            </span>
+          </div>
+
+          {/* Multiple Reference Links */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-slate-800">
+                Reference Link(s) <span className="text-slate-400 font-normal">(Google Drive, Dropbox, Canva, Figma, etc.)</span>
+              </label>
+              <button
+                type="button"
+                onClick={() => setRefLinks((prev) => [...prev, ''])}
+                className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Another Link</span>
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              {refLinks.map((link, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  <span className="w-7 text-center text-xs font-bold text-slate-400 font-mono">
+                    #{idx + 1}
+                  </span>
+                  <input
+                    type="text"
+                    value={link}
+                    onChange={(e) => {
+                      const next = [...refLinks];
+                      next[idx] = e.target.value;
+                      setRefLinks(next);
+                    }}
+                    placeholder={idx === 0 ? "https://drive.google.com/..." : "https://..."}
+                    className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
+                  />
+                  {refLinks.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setRefLinks((prev) => prev.filter((_, i) => i !== idx))}
+                      className="p-2 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                      title="Remove link"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <span className="text-[11px] text-slate-400 block">
+              Paste URLs for artwork, vector files, moodboards, or mockups.
+            </span>
+          </div>
+        </div>
+
+        {/* ================= SECTION 5: ATTACHMENTS ================= */}
+        <div className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200/80 shadow-xs space-y-4">
+          <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
+            <Upload className="w-4 h-4 text-cyan-700" />
+            <h2 className="text-sm font-bold text-slate-900 tracking-tight">
+              5. File Attachments (Logos, Vectors, Sample Photos)
+            </h2>
+          </div>
+
+          <div className="border-2 border-dashed border-slate-300 hover:border-cyan-600 rounded-2xl p-6 text-center bg-slate-50/60 transition-colors">
             <input
               type="file"
               multiple
               onChange={handleFileUpload}
               className="hidden"
-              id="page-file-upload"
+              id="view-file-upload-input"
             />
             <label
-              htmlFor="page-file-upload"
-              className="flex flex-col items-center justify-center cursor-pointer"
+              htmlFor="view-file-upload-input"
+              className="flex flex-col items-center justify-center cursor-pointer select-none"
             >
-              <Upload className="w-6 h-6 text-cyan-600 mb-1.5" />
-              <span className="text-xs font-semibold text-slate-700">Click to upload files</span>
-              <span className="text-[10px] text-slate-400 mt-0.5">PNG, JPG, PDF, AI, EPS up to 15MB each</span>
+              <div className="p-3 bg-cyan-100/70 rounded-full text-cyan-800 mb-2">
+                <Upload className="w-6 h-6" />
+              </div>
+              <span className="text-sm font-bold text-slate-800">
+                Click here or drag files to upload
+              </span>
+              <span className="text-xs text-slate-400 mt-1">
+                Supports PNG, JPG, PDF, AI, EPS up to 15MB each
+              </span>
             </label>
           </div>
 
+          {/* List of attachments */}
           {attachments.length > 0 && (
-            <div className="mt-3 space-y-1.5">
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className="p-2.5 rounded-lg bg-slate-100 flex items-center justify-between text-xs"
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    <FileText className="w-4 h-4 text-slate-500 flex-shrink-0" />
-                    <span className="font-semibold text-slate-800 truncate">{att.name}</span>
-                    <span className="text-slate-400 text-[10px]">
-                      ({(att.size / 1024).toFixed(0)} KB)
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => removeAttachment(att.id)}
-                    className="p-1 rounded text-rose-500 hover:bg-rose-50 cursor-pointer"
+            <div className="space-y-2 pt-2">
+              <span className="text-xs font-bold text-slate-700 block">
+                Attached Files ({attachments.length})
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {attachments.map((att) => (
+                  <div
+                    key={att.id}
+                    className="p-3 rounded-xl bg-slate-100/80 border border-slate-200 flex items-center justify-between text-xs"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
+                    <div className="flex items-center gap-2.5 truncate mr-2">
+                      <FileText className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                      <span className="font-semibold text-slate-800 truncate">{att.name}</span>
+                      <span className="text-[10px] text-slate-400 whitespace-nowrap">
+                        ({(att.size / 1024).toFixed(0)} KB)
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => removeAttachment(att.id)}
+                      className="p-1.5 rounded-lg text-rose-500 hover:bg-rose-100/70 transition-colors cursor-pointer flex-shrink-0"
+                      title="Remove file"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Submit Actions */}
-        <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
-          {onCancel && (
+        {/* Submit Actions Bar */}
+        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center justify-between gap-4">
+          {onCancel ? (
             <button
               type="button"
               onClick={onCancel}
-              className="px-5 py-2.5 rounded-xl border border-slate-300 font-semibold text-xs text-slate-700 hover:bg-slate-50 cursor-pointer"
+              className="px-5 py-2.5 rounded-xl border border-slate-300 font-semibold text-xs text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
             >
               Cancel
             </button>
+          ) : (
+            <div />
           )}
+
           <button
             type="submit"
             disabled={isSubmitting}
-            className="px-6 py-2.5 rounded-xl bg-[#0c192c] text-white font-bold text-xs hover:bg-cyan-800 transition-colors shadow-xs disabled:opacity-50 flex items-center gap-2 cursor-pointer"
+            className="px-8 py-3 rounded-xl bg-[#0c192c] hover:bg-slate-800 text-white font-bold text-xs transition-all shadow-md hover:shadow-lg disabled:opacity-50 flex items-center gap-2.5 cursor-pointer"
           >
             {isSubmitting ? (
-              <span>Submitting Request...</span>
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                <span>Submitting Mockup Request...</span>
+              </>
             ) : (
               <>
                 <FilePlus2 className="w-4 h-4 text-cyan-400" />

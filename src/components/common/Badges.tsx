@@ -1,6 +1,6 @@
 import React from 'react';
 import { RequestPriority, RequestStatus, RequestSource, UserRole } from '../../types';
-import { AlertCircle, Clock, CheckCircle2, XCircle, Zap } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, XCircle, Zap, RotateCcw } from 'lucide-react';
 
 export const PriorityBadge: React.FC<{ priority: RequestPriority; size?: 'sm' | 'md' }> = ({
   priority,
@@ -56,6 +56,15 @@ export const StatusBadge: React.FC<{ status: RequestStatus; size?: 'sm' | 'md' }
         >
           <CheckCircle2 className={isSm ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
           Completed
+        </span>
+      );
+    case 'REQUEST_BACK':
+      return (
+        <span
+          className={`inline-flex items-center gap-1 font-semibold rounded-md bg-amber-50 text-amber-800 border border-amber-300 ${sizeClasses}`}
+        >
+          <RotateCcw className={isSm ? 'w-3 h-3' : 'w-3.5 h-3.5'} />
+          Request Back
         </span>
       );
     case 'REJECTED':
