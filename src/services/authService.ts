@@ -17,6 +17,7 @@ import {
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { UserProfile, UserRole } from '../types';
 import { logAuditEvent } from './auditService';
+import { transferPendingRequestsForSalesUser } from './requestService';
 
 export const INITIAL_ADMIN_LOGIN_ID = '564302533';
 export const INITIAL_ADMIN_DEFAULT_PASSWORD = 'Uae@@120890';
@@ -598,6 +599,232 @@ export async function updateUserProfilePicture(
   }).catch(() => {});
 
   return updatedProfile;
+}
+
+/**
+ * Head of Sales or Admin assigns a temporary designer to a Sales Representative (Requirement 6 & 8).
+ * Duration must be between 1 day and 2 months.
+ * Automatically moves all pending/incomplete mockup requests to the new designer.
+ */
+export async function assignTemporaryDesigner(params: {
+  actor: UserProfile;
+  salesUserId: string;
+  newDesignerId: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  reason?: string;
+}): Promise<void> {
+  const { actor, salesUserId, newDesignerId, startDate, endDate, reason } = params;
+
+  if (actor.role !== 'HEAD_OF_SALES' && actor.role !== 'ADMIN') {
+    throw new Error('Unauthorized: Only Head of Sales or Administrators can assign a temporary designer.');
+  }
+
+  if (!startDate || !endDate) {
+    throw new Error('Start date and End date are both required.');
+  }
+
+  const start = new Date(startDate).getTime();
+  const end = new Date(endDate).getTime();
+  if (isNaN(start) || isNaN(end)) {
+    throw new Error('Invalid start or end date format.');
+  }
+
+  const diffMs = end - start;
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24)) + 1; // Inclusive day count
+
+  if (diffDays < 1) {
+    throw new Error('The temporary assignment duration must be at least 1 day.');
+  }
+
+  // Maximum duration: 2 months (approx 62 days)
+  if (diffDays > 62) {
+    throw new Error('The temporary assignment duration cannot exceed 2 months (62 days).');
+  }
+
+  // Fetch sales user and new designer
+  const [salesSnap, desSnap] = await Promise.all([
+    getDoc(doc(db, 'users', salesUserId)),
+    getDoc(doc(db, 'users', newDesignerId)),
+  ]);
+
+  if (!salesSnap.exists()) throw new Error('Sales User not found.');
+  if (!desSnap.exists()) throw new Error('Selected Designer not found.');
+
+  const salesUser = salesSnap.data() as UserProfile;
+  const newDesigner = desSnap.data() as UserProfile;
+
+  if (salesUser.role !== 'SALES_REPRESENTATIVE') {
+    throw new Error('Target user must be a Sales Representative.');
+  }
+  if (newDesigner.role !== 'DESIGNER') {
+    throw new Error('Target assigned user must be a Designer.');
+  }
+
+  const nowIso = new Date().toISOString();
+  const tempAssignment: import('../types').TemporaryDesignerAssignment = {
+    designerId: newDesigner.userId,
+    designerName: newDesigner.name,
+    startDate,
+    endDate,
+    assignedAt: nowIso,
+    assignedBy: actor.userId,
+    assignedByName: actor.name,
+    previousDesignerId: salesUser.assignedDesignerId || '',
+    previousDesignerName: salesUser.assignedDesignerName || '',
+  };
+
+  // Update Sales User document
+  await updateDoc(doc(db, 'users', salesUserId), {
+    temporaryDesigner: tempAssignment,
+    updatedAt: nowIso,
+  });
+
+  // Transfer all existing pending/incomplete requests automatically (Requirement 8)
+  const transferReason = reason || `Temporary assignment from ${startDate} to ${endDate} by ${actor.name}`;
+  await transferPendingRequestsForSalesUser({
+    salesUserId: salesUser.userId,
+    salesUserName: salesUser.name,
+    newDesignerId: newDesigner.userId,
+    newDesignerName: newDesigner.name,
+    actorId: actor.userId,
+    actorName: actor.name,
+    reason: transferReason,
+  });
+
+  // Audit log
+  await logAuditEvent({
+    action: 'TEMPORARY_DESIGNER_ASSIGNED',
+    performedBy: actor.userId,
+    performedByName: actor.name,
+    performedByRole: actor.role,
+    targetId: salesUser.userId,
+    targetType: 'User',
+    previousValue: salesUser.assignedDesignerName || 'None',
+    newValue: `Temporary: ${newDesigner.name} (${startDate} to ${endDate})`,
+  });
+}
+
+/**
+ * Clears an active temporary designer assignment, restoring the original designer and transferring pending requests.
+ */
+export async function clearTemporaryDesignerAssignment(params: {
+  actor: UserProfile;
+  salesUserId: string;
+}): Promise<void> {
+  const { actor, salesUserId } = params;
+  if (actor.role !== 'HEAD_OF_SALES' && actor.role !== 'ADMIN') {
+    throw new Error('Unauthorized: Only Head of Sales or Administrators can clear temporary designer assignments.');
+  }
+
+  const salesSnap = await getDoc(doc(db, 'users', salesUserId));
+  if (!salesSnap.exists()) throw new Error('Sales User not found.');
+  const salesUser = salesSnap.data() as UserProfile;
+
+  const temp = salesUser.temporaryDesigner;
+  if (!temp) return; // Nothing to clear
+
+  const originalDesignerId = temp.previousDesignerId || salesUser.assignedDesignerId;
+  const originalDesignerName = temp.previousDesignerName || salesUser.assignedDesignerName;
+
+  const nowIso = new Date().toISOString();
+  await updateDoc(doc(db, 'users', salesUserId), {
+    temporaryDesigner: null,
+    updatedAt: nowIso,
+  });
+
+  if (originalDesignerId && originalDesignerName) {
+    await transferPendingRequestsForSalesUser({
+      salesUserId: salesUser.userId,
+      salesUserName: salesUser.name,
+      newDesignerId: originalDesignerId,
+      newDesignerName: originalDesignerName,
+      actorId: actor.userId,
+      actorName: actor.name,
+      reason: `Temporary assignment ended / reverted to permanent designer ${originalDesignerName}`,
+    });
+  }
+
+  await logAuditEvent({
+    action: 'TEMPORARY_DESIGNER_CLEARED',
+    performedBy: actor.userId,
+    performedByName: actor.name,
+    performedByRole: actor.role,
+    targetId: salesUser.userId,
+    targetType: 'User',
+    previousValue: `Temporary: ${temp.designerName}`,
+    newValue: `Restored: ${originalDesignerName || 'Permanent Designer'}`,
+  });
+}
+
+/**
+ * Admin permanently reassigns a Sales User's designer (Requirement 7 & 8).
+ * Head of Sales is strictly disallowed.
+ * Automatically moves all pending/incomplete mockup requests to the new designer.
+ */
+export async function assignPermanentDesigner(params: {
+  actor: UserProfile;
+  salesUserId: string;
+  newDesignerId: string;
+  reason?: string;
+}): Promise<void> {
+  const { actor, salesUserId, newDesignerId, reason } = params;
+
+  if (actor.role !== 'ADMIN') {
+    throw new Error('Unauthorized: Only an Administrator can permanently change designer assignments.');
+  }
+
+  const [salesSnap, desSnap] = await Promise.all([
+    getDoc(doc(db, 'users', salesUserId)),
+    getDoc(doc(db, 'users', newDesignerId)),
+  ]);
+
+  if (!salesSnap.exists()) throw new Error('Sales User not found.');
+  if (!desSnap.exists()) throw new Error('Selected Designer not found.');
+
+  const salesUser = salesSnap.data() as UserProfile;
+  const newDesigner = desSnap.data() as UserProfile;
+
+  if (salesUser.role !== 'SALES_REPRESENTATIVE') {
+    throw new Error('Target user must be a Sales Representative.');
+  }
+  if (newDesigner.role !== 'DESIGNER') {
+    throw new Error('Target assigned user must be a Designer.');
+  }
+
+  const prevDesignerName = salesUser.assignedDesignerName || 'None';
+  const nowIso = new Date().toISOString();
+
+  await updateDoc(doc(db, 'users', salesUserId), {
+    assignedDesignerId: newDesigner.userId,
+    assignedDesignerName: newDesigner.name,
+    temporaryDesigner: null, // Clear any active temporary assignment
+    updatedAt: nowIso,
+  });
+
+  // Transfer all pending/incomplete requests (Requirement 8)
+  const transferReason = reason || `Permanent reassignment by Administrator ${actor.name}`;
+  await transferPendingRequestsForSalesUser({
+    salesUserId: salesUser.userId,
+    salesUserName: salesUser.name,
+    newDesignerId: newDesigner.userId,
+    newDesignerName: newDesigner.name,
+    actorId: actor.userId,
+    actorName: actor.name,
+    reason: transferReason,
+  });
+
+  // Audit log
+  await logAuditEvent({
+    action: 'PERMANENT_DESIGNER_ASSIGNED',
+    performedBy: actor.userId,
+    performedByName: actor.name,
+    performedByRole: 'ADMIN',
+    targetId: salesUser.userId,
+    targetType: 'User',
+    previousValue: prevDesignerName,
+    newValue: `Permanent: ${newDesigner.name}`,
+  });
 }
 
 

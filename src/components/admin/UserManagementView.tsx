@@ -8,6 +8,10 @@ import {
   INITIAL_ADMIN_DEFAULT_PASSWORD,
   INITIAL_ADMIN_LOGIN_ID,
 } from '../../services/authService';
+import {
+  reassignSalesUserDesignerPermanent,
+  reassignSalesUserDesignerTemporary,
+} from '../../services/requestService';
 import { formatDateInTimezone } from '../../utils/dateUtils';
 import { RoleBadge } from '../common/Badges';
 import {
@@ -27,6 +31,8 @@ import {
   RefreshCw,
   User,
   Camera,
+  Palette,
+  Calendar,
 } from 'lucide-react';
 import { UserAvatar } from '../common/UserAvatar';
 import { UserProfileModal } from '../profile/UserProfileModal';
@@ -70,6 +76,14 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
   const [formAssignedDesignerId, setFormAssignedDesignerId] = useState('');
   const [formAvatarUrl, setFormAvatarUrl] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Reassignment Modal state
+  const [reassigningUser, setReassigningUser] = useState<UserProfile | null>(null);
+  const [reassignMode, setReassignMode] = useState<'PERMANENT' | 'TEMPORARY'>('PERMANENT');
+  const [reassignTargetDesignerId, setReassignTargetDesignerId] = useState('');
+  const [reassignStartDate, setReassignStartDate] = useState('');
+  const [reassignEndDate, setReassignEndDate] = useState('');
+  const [reassignTransferPending, setReassignTransferPending] = useState(true);
 
   // Available Designers for assignment dropdown
   const designers = useMemo(() => {
@@ -630,7 +644,7 @@ export const UserManagementView: React.FC<UserManagementViewProps> = ({
                     <option value="">-- Select Assigned Designer --</option>
                     {designers.map((d) => (
                       <option key={d.userId} value={d.userId}>
-                        {d.name} (ID: {d.loginId})
+                        {d.name}
                       </option>
                     ))}
                   </select>

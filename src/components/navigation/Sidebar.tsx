@@ -190,9 +190,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <p className="text-[10px] text-cyan-400 font-medium truncate">
                 {roleDisplayNames[currentUser.role]}
               </p>
-              <p className="text-[10px] text-slate-400 font-mono tracking-wider truncate">
-                ID: {currentUser.loginId}
-              </p>
             </div>
           </div>
           <button

@@ -917,32 +917,25 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
           </div>
 
           {/* Reference Links */}
-          {(request.referenceLinks || request.additionalLinks) && (
+          {((request.additionalReferenceLinks && request.additionalReferenceLinks.length > 0) || request.referenceLinks || request.additionalLinks) && (
             <div className="space-y-2">
               <h4 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Reference Links</h4>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {request.referenceLinks && (
+                {(request.additionalReferenceLinks && request.additionalReferenceLinks.length > 0
+                  ? request.additionalReferenceLinks
+                  : [request.referenceLinks, request.additionalLinks].filter(Boolean) as string[]
+                ).map((link, idx) => (
                   <a
-                    href={request.referenceLinks}
+                    key={idx}
+                    href={link}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between hover:bg-slate-50 text-cyan-700 font-medium"
+                    className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between hover:bg-slate-50 text-cyan-700 font-medium shadow-2xs transition-colors"
                   >
-                    <span className="truncate max-w-[240px]">{request.referenceLinks}</span>
+                    <span className="truncate max-w-[240px] text-xs font-semibold">{link}</span>
                     <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
                   </a>
-                )}
-                {request.additionalLinks && (
-                  <a
-                    href={request.additionalLinks}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-2.5 rounded-lg border border-slate-200 bg-white flex items-center justify-between hover:bg-slate-50 text-cyan-700 font-medium"
-                  >
-                    <span className="truncate max-w-[240px]">{request.additionalLinks}</span>
-                    <ExternalLink className="w-3.5 h-3.5 flex-shrink-0" />
-                  </a>
-                )}
+                ))}
               </div>
             </div>
           )}
@@ -1097,13 +1090,25 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
             )}
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {/* Download Production Job Sheet PDF */}
+            <button
+              type="button"
+              onClick={handleDownloadJobSheet}
+              disabled={isGeneratingPdf}
+              className="px-3.5 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Download Merchlist Production Job Sheet (PDF)"
+            >
+              {isGeneratingPdf ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+              <span>Download Job Sheet</span>
+            </button>
+
             {/* Sales Representative Action: Revision Request on Completed Order */}
             {request.status === 'COMPLETED' && (isSalesOwner || isAdmin) && (
               <button
                 onClick={() => setShowRevisionModal(true)}
                 disabled={isSubmitting}
-                className="px-4 py-2 rounded-xl bg-purple-600 text-white font-semibold hover:bg-purple-700 text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+                className="px-4 py-2 rounded-xl bg-purple-600 text-white font-semibold hover:bg-purple-700 text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
               >
                 <FileEdit className="w-4 h-4" />
                 Revision Request
@@ -1114,17 +1119,28 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
             {isDesigner && request.status === 'PENDING' && (
               <>
                 <button
+                  type="button"
+                  onClick={() => setShowRequestBackModal(true)}
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-xl border border-amber-400 bg-amber-50 text-amber-800 font-semibold hover:bg-amber-100 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 text-amber-700" />
+                  Request Back
+                </button>
+                <button
+                  type="button"
                   onClick={() => setShowRejectModal(true)}
                   disabled={isSubmitting}
-                  className="px-4 py-2 rounded-xl border border-rose-300 text-rose-700 font-semibold hover:bg-rose-50 text-xs flex items-center gap-1.5 transition-colors"
+                  className="px-4 py-2 rounded-xl border border-rose-300 text-rose-700 font-semibold hover:bg-rose-50 text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
                 >
                   <XCircle className="w-4 h-4" />
                   Reject Request
                 </button>
                 <button
+                  type="button"
                   onClick={() => setShowCompleteConfirm(true)}
                   disabled={isSubmitting}
-                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-700 text-xs flex items-center gap-1.5 transition-colors shadow-xs"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white font-semibold hover:bg-emerald-700 text-xs flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
                 >
                   <CheckCircle2 className="w-4 h-4" />
                   Mark as Complete
@@ -1134,7 +1150,7 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
 
             <button
               onClick={onClose}
-              className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100 text-xs transition-colors"
+              className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-100 text-xs transition-colors cursor-pointer"
             >
               Close
             </button>
@@ -1254,6 +1270,62 @@ export const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
                   className="px-4 py-2 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 shadow-sm disabled:opacity-50"
                 >
                   {isSubmitting ? 'Rejecting...' : 'Reject Request'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Dialog: Request Back (Designer returns to sales rep for clarification) */}
+      {showRequestBackModal && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-950/70">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-200 mb-3">
+              <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                <RotateCcw className="w-4 h-4 text-amber-600" />
+                Request Back — {request.requestId}
+              </h4>
+              <button
+                type="button"
+                onClick={() => setShowRequestBackModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              Return this request to the Sales Representative for clarification or missing assets (e.g. vector logos, specific pantone codes, product confirmation). The request status will become <strong>REQUEST BACK</strong> and notify the sales representative.
+            </p>
+            <form onSubmit={handleRequestBack}>
+              <div className="mb-4">
+                <label className="block text-xs font-bold text-slate-800 mb-1.5">
+                  Clarification Required / Reason <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={4}
+                  value={requestBackReason}
+                  onChange={(e) => setRequestBackReason(e.target.value)}
+                  required
+                  placeholder="e.g. Please provide high-resolution SVG or AI logo file; the current PNG has insufficient resolution for print."
+                  className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-3 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowRequestBackModal(false)}
+                  className="px-4 py-2 rounded-lg border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 rounded-lg bg-amber-500 text-slate-950 text-xs font-bold hover:bg-amber-400 shadow-sm flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  {isSubmitting ? 'Returning...' : 'Send Request Back'}
                 </button>
               </div>
             </form>

@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { UserProfile } from '../../types';
 import { RoleBadge } from '../common/Badges';
 import { UserAvatar } from '../common/UserAvatar';
 import { PRIMARY_APP_ICON_DATA_URL, WORDMARK_LOGO_DATA_URL } from '../brand/logoData';
+import { getActiveDesignerForSalesUser } from '../../services/requestService';
 import { Bell, Menu, Palette, Shield } from 'lucide-react';
 
 interface TopBarProps {
@@ -24,6 +25,10 @@ export const TopBar: React.FC<TopBarProps> = ({
   unreadCount = 0,
   assignedDesignerName,
 }) => {
+  const activeDesignerInfo = useMemo(() => {
+    return getActiveDesignerForSalesUser(currentUser);
+  }, [currentUser]);
+
   return (
     <header className="sticky top-0 z-20 bg-white/95 backdrop-blur-xs border-b border-slate-200/80 px-4 md:px-8 py-3.5 flex items-center justify-between shadow-xs">
       <div className="flex items-center gap-3">
@@ -71,11 +76,18 @@ export const TopBar: React.FC<TopBarProps> = ({
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-50/70 border border-cyan-200/80">
             <Palette className="w-3.5 h-3.5 text-cyan-700" />
             <div className="text-left leading-none">
-              <span className="text-[10px] text-cyan-700 font-semibold uppercase tracking-wider block">
-                Assigned Designer
-              </span>
-              <span className="text-xs font-bold text-slate-900">
-                {assignedDesignerName || currentUser.assignedDesignerName || 'None'}
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-cyan-700 font-semibold uppercase tracking-wider block">
+                  Assigned Designer
+                </span>
+                {activeDesignerInfo.isTemporary && (
+                  <span className="text-[9px] bg-amber-100 text-amber-900 border border-amber-300 px-1 rounded font-bold">
+                    Cover until {activeDesignerInfo.endDate}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs font-bold text-slate-900 mt-0.5 block">
+                {activeDesignerInfo.designerName || assignedDesignerName || currentUser.assignedDesignerName || 'None'}
               </span>
             </div>
           </div>

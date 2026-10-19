@@ -243,7 +243,6 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold text-[10px] uppercase">
                     <th className="py-2.5 px-3">Sales Rep</th>
-                    <th className="py-2.5 px-3">Login ID</th>
                     <th className="py-2.5 px-3">Assigned Designer</th>
                     <th className="py-2.5 px-3">Total Requests</th>
                     <th className="py-2.5 px-3">Completed</th>
@@ -262,7 +261,6 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                     return (
                       <tr key={rep.userId} className="hover:bg-slate-50/80">
                         <td className="py-2.5 px-3 font-semibold text-slate-900">{rep.name}</td>
-                        <td className="py-2.5 px-3 font-mono text-slate-600">{rep.loginId}</td>
                         <td className="py-2.5 px-3 font-medium text-cyan-800">
                           {rep.assignedDesignerName || 'Unassigned'}
                         </td>
@@ -300,7 +298,6 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold text-[10px] uppercase">
                     <th className="py-2.5 px-3">Designer</th>
-                    <th className="py-2.5 px-3">Login ID</th>
                     <th className="py-2.5 px-3">Assigned Total</th>
                     <th className="py-2.5 px-3">Completed</th>
                     <th className="py-2.5 px-3">Active Pending</th>
@@ -324,7 +321,6 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                     return (
                       <tr key={des.userId} className="hover:bg-slate-50/80">
                         <td className="py-2.5 px-3 font-semibold text-slate-900">{des.name}</td>
-                        <td className="py-2.5 px-3 font-mono text-slate-600">{des.loginId}</td>
                         <td className="py-2.5 px-3 font-bold">{desReqs.length}</td>
                         <td className="py-2.5 px-3 text-emerald-700 font-semibold">{completed}</td>
                         <td className="py-2.5 px-3 text-amber-700 font-semibold">{pending}</td>
@@ -369,7 +365,7 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                 <option value="">-- Choose Sales Representative --</option>
                 {salesReps.map((rep) => (
                   <option key={rep.userId} value={rep.userId}>
-                    {rep.name} (ID: {rep.loginId})
+                    {rep.name}
                   </option>
                 ))}
               </select>
@@ -390,7 +386,7 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                 <option value="">-- Choose Designer --</option>
                 {designers.map((des) => (
                   <option key={des.userId} value={des.userId}>
-                    {des.name} (ID: {des.loginId})
+                    {des.name}
                   </option>
                 ))}
               </select>
@@ -407,7 +403,7 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                       {selectedRepStats.user.name}
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Login ID: <span className="font-mono">{selectedRepStats.user.loginId}</span> | Assigned Designer:{' '}
+                      Role: <span className="font-semibold text-slate-700">Sales Representative</span> | Assigned Designer:{' '}
                       <span className="font-bold text-slate-800">
                         {selectedRepStats.user.assignedDesignerName || 'Unassigned'}
                       </span>
@@ -456,7 +452,7 @@ export const HeadOfSalesDashboard: React.FC<HeadOfSalesDashboardProps> = ({
                       {selectedDesignerStats.user.name}
                     </h3>
                     <p className="text-xs text-slate-500">
-                      Login ID: <span className="font-mono">{selectedDesignerStats.user.loginId}</span> (Designer)
+                      Role: <span className="font-semibold text-slate-700">Designer</span>
                     </p>
                   </div>
                 </div>

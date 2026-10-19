@@ -17,6 +17,7 @@ import {
   RequestSource,
   DesignerCapacity,
   UserProfile,
+  RequestAttachment,
 } from '../types';
 import { logAuditEvent } from './auditService';
 import { createNotification } from './notificationService';
@@ -123,6 +124,10 @@ export function getActiveDesignerForSalesUser(
   designerName: string;
   isTemporary: boolean;
   temporaryAssignment?: UserProfile['temporaryDesigner'];
+  startDate?: string;
+  endDate?: string;
+  originalDesignerName?: string;
+  previousDesignerName?: string;
 } {
   if (user.role !== 'SALES_REPRESENTATIVE') {
     return {
@@ -142,6 +147,10 @@ export function getActiveDesignerForSalesUser(
         designerName: temp.designerName,
         isTemporary: true,
         temporaryAssignment: temp,
+        startDate: temp.startDate,
+        endDate: temp.endDate,
+        originalDesignerName: temp.previousDesignerName,
+        previousDesignerName: temp.previousDesignerName,
       };
     }
     // Expired temporary assignment - automatically reverts to original/permanent designer!
@@ -158,12 +167,15 @@ export function getActiveDesignerForSalesUser(
  * Checks queue of selected designer for priority warning popup (Requirement 19).
  */
 export async function getDesignerPriorityWarning(
-  designerId: string
+  designerId: string,
+  _priority?: RequestPriority | string
 ): Promise<{
   showWarning: boolean;
+  hasWarning: boolean;
   superUrgentCount: number;
   urgentCount: number;
   message: string;
+  warningMessage: string;
 }> {
   try {
     const q = query(collection(db, 'mockupRequests'), where('designerId', '==', designerId));
@@ -184,9 +196,11 @@ export async function getDesignerPriorityWarning(
     if (superUrgentCount === 0 && urgentCount === 0) {
       return {
         showWarning: false,
+        hasWarning: false,
         superUrgentCount: 0,
         urgentCount: 0,
         message: '',
+        warningMessage: '',
       };
     }
 
@@ -205,17 +219,21 @@ export async function getDesignerPriorityWarning(
 
     return {
       showWarning: true,
+      hasWarning: true,
       superUrgentCount,
       urgentCount,
       message,
+      warningMessage: message,
     };
   } catch (err) {
     console.warn('Failed to calculate priority warning:', err);
     return {
       showWarning: false,
+      hasWarning: false,
       superUrgentCount: 0,
       urgentCount: 0,
       message: '',
+      warningMessage: '',
     };
   }
 }
@@ -965,20 +983,46 @@ export async function resubmitReturnedRequest(params: {
   request: MockupRequest;
   salesRepresentativeId: string;
   salesRepresentativeName: string;
-  updatedFields: {
+  updatedNotes?: string;
+  itemNames?: string[];
+  additionalReferenceLinks?: string[];
+  newAttachments?: RequestAttachment[];
+  updatedFields?: {
     itemNames?: string[];
     notes?: string;
     additionalReferenceLinks?: string[];
     attachments?: MockupRequest['attachments'];
   };
+  timezone?: string;
 }): Promise<void> {
   const req = params.request;
   const nowIso = new Date().toISOString();
 
-  const itemNames = params.updatedFields.itemNames || req.itemNames || (req.itemName ? [req.itemName] : []);
+  const itemNames =
+    params.itemNames ||
+    params.updatedFields?.itemNames ||
+    req.itemNames ||
+    (req.itemName ? [req.itemName] : []);
   const itemName = itemNames.length > 0 ? itemNames[0] : req.itemName;
-  const addLinks = params.updatedFields.additionalReferenceLinks || req.additionalReferenceLinks || [];
+  const addLinks =
+    params.additionalReferenceLinks ||
+    params.updatedFields?.additionalReferenceLinks ||
+    req.additionalReferenceLinks ||
+    [];
   const additionalLinks = addLinks.length > 0 ? addLinks.join(' , ') : req.additionalLinks;
+
+  const notesVal =
+    params.updatedNotes !== undefined
+      ? params.updatedNotes
+      : params.updatedFields?.notes !== undefined
+      ? params.updatedFields.notes
+      : req.notes;
+
+  const finalAttachments = [
+    ...(req.attachments || []),
+    ...(params.newAttachments || []),
+    ...(params.updatedFields?.attachments || []),
+  ];
 
   const updatedTimeline = [
     ...(req.timeline || []),
@@ -996,10 +1040,10 @@ export async function resubmitReturnedRequest(params: {
     await updateDoc(doc(db, 'mockupRequests', req.id), {
       itemNames,
       itemName,
-      notes: params.updatedFields.notes !== undefined ? params.updatedFields.notes : req.notes,
+      notes: notesVal,
       additionalReferenceLinks: addLinks,
       additionalLinks,
-      attachments: params.updatedFields.attachments || req.attachments || [],
+      attachments: finalAttachments,
       status: 'PENDING',
       requestBackAt: null,
       requestBackReason: null,

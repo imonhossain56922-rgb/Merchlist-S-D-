@@ -113,8 +113,8 @@ export function calculateDailyOverview(
   requests: Array<{
     createdAt: string;
     completedAt?: string | null;
-    status: 'PENDING' | 'REJECTED' | 'COMPLETED';
-    priority: 'REGULAR' | 'URGENT' | 'SUPER_URGENT';
+    status: 'PENDING' | 'REJECTED' | 'REQUEST_BACK' | 'COMPLETED' | string;
+    priority: 'REGULAR' | 'URGENT' | 'SUPER_URGENT' | string;
     deleted?: boolean;
   }>,
   timeZone = DEFAULT_TIMEZONE

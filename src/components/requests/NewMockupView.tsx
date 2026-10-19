@@ -51,15 +51,14 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
     return getActiveDesignerForSalesUser(currentUser);
   }, [currentUser]);
 
-  // Form input state variables
-  const [mockupTitle, setMockupTitle] = useState('');
+  // Form input state variables (Requirement 4: Mockup Title removed)
   const [items, setItems] = useState<string[]>(['']);
   const [clientName, setClientName] = useState('');
   const [clientMobileNumber, setClientMobileNumber] = useState('');
-  const [contactBy, setContactBy] = useState('WhatsApp');
+  const [contactBy, setContactBy] = useState('Gallabox');
   const [notes, setNotes] = useState('');
   const [refLinks, setRefLinks] = useState<string[]>(['']);
-  const [source, setSource] = useState<RequestSource>('whatsapp');
+  const [source, setSource] = useState<RequestSource>('gallabox');
   const [priority, setPriority] = useState<RequestPriority>('REGULAR');
   const [priorityWarning, setPriorityWarning] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<
@@ -100,27 +99,50 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
     };
   }, [allUsers]);
 
-  // 2. Default to active assigned designer or first designer once loaded
+  // Requirement 1: Each Sales User must only be able to create/request mockups from Designer(s) assigned/authorized
+  const authorizedDesigners = useMemo(() => {
+    if (currentUser.role === 'SALES_REPRESENTATIVE') {
+      const activeId = activeAssignment.designerId || currentUser.assignedDesignerId;
+      if (activeId) {
+        const found = availableDesigners.find((d) => d.userId === activeId);
+        if (found) return [found];
+        return [
+          {
+            userId: activeId,
+            name: activeAssignment.designerName || currentUser.assignedDesignerName || 'Assigned Designer',
+            role: 'DESIGNER' as const,
+            active: true,
+            loginId: '',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ];
+      }
+      return [];
+    }
+    return availableDesigners;
+  }, [currentUser.role, activeAssignment, currentUser.assignedDesignerId, currentUser.assignedDesignerName, availableDesigners]);
+
+  // 2. Default to active assigned designer once loaded
   useEffect(() => {
     const targetId = activeAssignment.designerId || currentUser.assignedDesignerId;
-    if (!selectedDesignerId && availableDesigners.length > 0) {
+    if (currentUser.role === 'SALES_REPRESENTATIVE') {
+      if (targetId) setSelectedDesignerId(targetId);
+    } else if (!selectedDesignerId && availableDesigners.length > 0) {
       const match = availableDesigners.find((d) => d.userId === targetId);
-      if (match) {
-        setSelectedDesignerId(match.userId);
-      } else {
-        setSelectedDesignerId(availableDesigners[0].userId);
-      }
+      setSelectedDesignerId(match ? match.userId : availableDesigners[0].userId);
     }
-  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId, activeAssignment]);
+  }, [availableDesigners, currentUser.assignedDesignerId, currentUser.role, selectedDesignerId, activeAssignment]);
 
   // Find currently selected designer profile
   const selectedDesigner = useMemo(() => {
     return (
+      authorizedDesigners.find((d) => d.userId === selectedDesignerId) ||
       availableDesigners.find((d) => d.userId === selectedDesignerId) ||
       allUsers.find((u) => u.userId === selectedDesignerId) ||
       null
     );
-  }, [availableDesigners, allUsers, selectedDesignerId]);
+  }, [authorizedDesigners, availableDesigners, allUsers, selectedDesignerId]);
 
   // 3. Load designer workload capacity
   useEffect(() => {
@@ -196,22 +218,18 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
     const validItems = items.map((i) => i.trim()).filter(Boolean);
     const validLinks = refLinks.map((l) => l.trim()).filter(Boolean);
 
-    // Validation
-    if (!isGallabox && !mockupTitle.trim()) {
-      setErrorMessage('Please enter the Mockup Title.');
-      return;
-    }
+    // Validation (Requirement 9: Item / Product Name required only for WhatsApp / E-mail / Others)
     if (!isGallabox && validItems.length === 0) {
       setErrorMessage('Please enter at least one Item / Product Name.');
       return;
     }
 
-    const designerIdToUse = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId || availableDesigners[0]?.userId;
+    const designerIdToUse = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId || authorizedDesigners[0]?.userId;
     const designerNameToUse =
-      selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName || availableDesigners[0]?.name || 'Assigned Designer';
+      selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName || authorizedDesigners[0]?.name || 'Assigned Designer';
 
     if (!designerIdToUse) {
-      setErrorMessage('No designer found in the system. Please ensure an active designer exists.');
+      setErrorMessage('No designer found or authorized. Please ensure an active designer exists.');
       return;
     }
 
@@ -232,27 +250,23 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
 
     setIsSubmitting(true);
     try {
-      const finalTitle = isGallabox
-        ? mockupTitle.trim() || `Gallabox - ${clientName.trim() || 'Request'}`
-        : mockupTitle.trim();
-
       const finalItem = validItems.length > 0
         ? validItems.join(', ')
-        : (isGallabox ? 'Merchlist Mockup' : 'Custom Merchandise');
+        : (isGallabox ? null : 'Custom Merchandise');
 
       await createMockupRequest({
         source,
         priority,
-        mockupTitle: finalTitle,
+        mockupTitle: null, // Requirement 4: Mockup Title removed
         itemName: finalItem,
-        itemNames: validItems.length > 0 ? validItems : [finalItem],
+        itemNames: validItems.length > 0 ? validItems : (finalItem ? [finalItem] : []),
         clientName: clientName.trim() || null,
         clientMobileNumber: clientMobileNumber.trim() || null,
         contactBy: contactBy.trim() || null,
-        notes: notes.trim(),
+        notes: notes.trim(), // Requirement 10: Optional
         referenceLinks: validLinks[0] || null,
         additionalLinks: validLinks[1] || null,
-        additionalReferenceLinks: validLinks,
+        additionalReferenceLinks: validLinks, // Requirement 3: Multi-links
         attachments,
         salesRepresentativeId: currentUser.userId,
         salesRepresentativeName: currentUser.name,
@@ -357,116 +371,100 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
           <div className="flex items-center gap-2 pb-3 border-b border-slate-100">
             <Tag className="w-4 h-4 text-cyan-700" />
             <h2 className="text-sm font-bold text-slate-900 tracking-tight">
-              1. Mockup & Product Specifications
+              1. Order Specifications
             </h2>
           </div>
 
-          <div className="space-y-4">
-            {/* Mockup Title */}
+          <div className="space-y-5">
+            {/* Requirement 5: Request Source Selector with EXACT order: 1. Gallabox, 2. WhatsApp, 3. E-mail, 4. Others */}
             <div>
-              <label className="block text-xs font-bold text-slate-800 mb-1.5">
-                Mockup Title {source !== 'gallabox' && <span className="text-rose-500">*</span>}
+              <label className="block text-xs font-bold text-slate-800 mb-2">
+                Request Source <span className="text-rose-500">*</span>
               </label>
-              <input
-                type="text"
-                value={mockupTitle}
-                onChange={(e) => setMockupTitle(e.target.value)}
-                placeholder="e.g. Corporate Merchandise Collection - Acme Corp"
-                required={source !== 'gallabox'}
-                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
-              />
-              <span className="text-[11px] text-slate-400 mt-1 block">
-                Short title to identify this mockup in the designer queue.
-              </span>
-            </div>
-
-            {/* Multiple Items / Products */}
-            <div className="space-y-2.5">
-              <div className="flex items-center justify-between">
-                <label className="block text-xs font-bold text-slate-800">
-                  Item(s) / Product(s) {source !== 'gallabox' && <span className="text-rose-500">*</span>}
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setItems((prev) => [...prev, ''])}
-                  className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Add Another Item</span>
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                {items.map((item, idx) => (
-                  <div key={idx} className="flex items-center gap-2">
-                    <span className="w-7 text-center text-xs font-bold text-slate-400 font-mono">
-                      #{idx + 1}
-                    </span>
-                    <input
-                      type="text"
-                      value={item}
-                      onChange={(e) => {
-                        const next = [...items];
-                        next[idx] = e.target.value;
-                        setItems(next);
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {[
+                  { id: 'gallabox', label: '1. Gallabox', color: 'hover:border-cyan-500 text-cyan-700' },
+                  { id: 'whatsapp', label: '2. WhatsApp', color: 'hover:border-emerald-500 text-emerald-700' },
+                  { id: 'email', label: '3. E-mail', color: 'hover:border-blue-500 text-blue-700' },
+                  { id: 'others', label: '4. Others', color: 'hover:border-purple-500 text-purple-700' },
+                ].map((s) => {
+                  const isSelected = source === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setSource(s.id as RequestSource);
+                        if (s.id === 'gallabox') setContactBy('Gallabox');
+                        else if (s.id === 'whatsapp') setContactBy('WhatsApp');
+                        else if (s.id === 'email') setContactBy('Email');
                       }}
-                      placeholder={idx === 0 ? "e.g. Black Dry-Fit Polo Shirt with Embroidery" : `Item #${idx + 1} name or description`}
-                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
-                    />
-                    {items.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}
-                        className="p-2 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
-                        title="Remove item"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                      className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
+                        isSelected
+                          ? 'bg-[#0c192c] text-white border-[#0c192c] shadow-xs'
+                          : `bg-slate-50 text-slate-700 border-slate-200 ${s.color}`
+                      }`}
+                    >
+                      <span>{s.label}</span>
+                      {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400" />}
+                    </button>
+                  );
+                })}
               </div>
-              <span className="text-[11px] text-slate-400 block">
-                Specify all products or apparel articles included in this mockup job.
-              </span>
             </div>
-          </div>
 
-          {/* Request Source Selector */}
-          <div>
-            <label className="block text-xs font-bold text-slate-800 mb-2">
-              Request Source <span className="text-rose-500">*</span>
-            </label>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {[
-                { id: 'whatsapp', label: 'WhatsApp', color: 'hover:border-emerald-500 text-emerald-700' },
-                { id: 'gallabox', label: 'Gallabox', color: 'hover:border-cyan-500 text-cyan-700' },
-                { id: 'email', label: 'Email', color: 'hover:border-blue-500 text-blue-700' },
-                { id: 'others', label: 'Others', color: 'hover:border-purple-500 text-purple-700' },
-              ].map((s) => {
-                const isSelected = source === s.id;
-                return (
+            {/* Requirement 9: Item / Product Name must ONLY be displayed when Request Source is WhatsApp, E-mail, Others. DO NOT display for Gallabox. */}
+            {source !== 'gallabox' && (
+              <div className="space-y-2.5 pt-2 border-t border-slate-100">
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-bold text-slate-800">
+                    Item / Product Name <span className="text-rose-500">*</span>
+                  </label>
                   <button
-                    key={s.id}
                     type="button"
-                    onClick={() => {
-                      setSource(s.id as RequestSource);
-                      if (s.id === 'whatsapp') setContactBy('WhatsApp');
-                      else if (s.id === 'gallabox') setContactBy('Gallabox');
-                      else if (s.id === 'email') setContactBy('Email');
-                    }}
-                    className={`p-3 rounded-xl border text-xs font-bold transition-all flex items-center justify-between cursor-pointer ${
-                      isSelected
-                        ? 'bg-[#0c192c] text-white border-[#0c192c] shadow-xs'
-                        : `bg-slate-50 text-slate-700 border-slate-200 ${s.color}`
-                    }`}
+                    onClick={() => setItems((prev) => [...prev, ''])}
+                    className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
                   >
-                    <span>{s.label}</span>
-                    {isSelected && <Check className="w-3.5 h-3.5 text-cyan-400" />}
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add Item/Product</span>
                   </button>
-                );
-              })}
-            </div>
+                </div>
+
+                <div className="space-y-2">
+                  {items.map((item, idx) => (
+                    <div key={idx} className="flex items-center gap-2">
+                      <span className="w-7 text-center text-xs font-bold text-slate-400 font-mono">
+                        #{idx + 1}
+                      </span>
+                      <input
+                        type="text"
+                        value={item}
+                        onChange={(e) => {
+                          const next = [...items];
+                          next[idx] = e.target.value;
+                          setItems(next);
+                        }}
+                        placeholder={`Item / Product Name ${idx + 1}`}
+                        className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
+                      />
+                      {items.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}
+                          className="p-2 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                          title="Remove item"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <span className="text-[11px] text-slate-400 block">
+                  Specify each product or merchandise article included in this mockup order.
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -489,7 +487,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 type="text"
                 value={clientName}
                 onChange={(e) => setClientName(e.target.value)}
-                placeholder="e.g. Acme Corp / John"
+                placeholder="Client or company name"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
               />
               <span className="text-[11px] text-slate-400 mt-1 block">
@@ -506,7 +504,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 type="text"
                 value={clientMobileNumber}
                 onChange={(e) => setClientMobileNumber(e.target.value)}
-                placeholder="e.g. +971 50 123 4567"
+                placeholder="Mobile phone number with country code"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm font-mono focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
               />
               <span className="text-[11px] text-slate-400 mt-1 block">
@@ -523,7 +521,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 type="text"
                 value={contactBy}
                 onChange={(e) => setContactBy(e.target.value)}
-                placeholder="e.g. WhatsApp / Phone / Email"
+                placeholder="WhatsApp, Phone, or Email"
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
               />
               <span className="text-[11px] text-slate-400 mt-1 block">
@@ -632,7 +630,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
             )}
           </div>
 
-          {/* Designer Selector */}
+          {/* Designer Selector (Requirement 1: Sales User only sees authorized Designer. Requirement 2: No Login ID displayed) */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
@@ -640,9 +638,9 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 <span>Assigned Designer</span>
                 <span className="text-rose-500">*</span>
               </label>
-              {selectedDesigner && (
-                <span className="text-xs font-mono font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                  ID: {selectedDesigner.loginId}
+              {activeAssignment.isTemporary && (
+                <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-2 py-0.5 rounded">
+                  Temporary Coverage Active
                 </span>
               )}
             </div>
@@ -651,12 +649,13 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
               value={selectedDesignerId}
               onChange={(e) => setSelectedDesignerId(e.target.value)}
               required
-              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-semibold focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+              disabled={currentUser.role === 'SALES_REPRESENTATIVE' && authorizedDesigners.length <= 1}
+              className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-900 text-sm font-semibold focus:ring-2 focus:ring-[#0c192c] focus:outline-none disabled:bg-slate-100 disabled:text-slate-800 disabled:cursor-not-allowed"
             >
-              <option value="">-- Choose Assigned Designer --</option>
-              {availableDesigners.map((d) => (
+              {authorizedDesigners.length === 0 && <option value="">-- No Authorized Designer Assigned --</option>}
+              {authorizedDesigners.map((d) => (
                 <option key={d.userId} value={d.userId}>
-                  {d.name} (Login ID: {d.loginId})
+                  {d.name}
                 </option>
               ))}
             </select>
@@ -675,7 +674,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
             </h2>
           </div>
 
-          {/* Notes / Instructions (Optional) */}
+          {/* Notes / Instructions (Optional - Requirement 10) */}
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-xs font-bold text-slate-800">
@@ -686,7 +685,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
               rows={4}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Enter detailed design instructions: logo placement, dimensions, pantone color codes, mockup angles, text customizations..."
+              placeholder="Design instructions, dimensions, color codes, placement details..."
               className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 leading-relaxed font-sans bg-white"
             />
             <span className="text-[11px] text-slate-400 mt-1 block">
@@ -694,11 +693,11 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
             </span>
           </div>
 
-          {/* Multiple Reference Links */}
+          {/* Requirement 3: Additional Reference Link (Figma / Canva / WeTransfer) with + Add New Link */}
           <div className="space-y-2.5">
             <div className="flex items-center justify-between">
               <label className="block text-xs font-bold text-slate-800">
-                Reference Link(s) <span className="text-slate-400 font-normal">(Google Drive, Dropbox, Canva, Figma, etc.)</span>
+                Additional Reference Link (Figma / Canva / WeTransfer)
               </label>
               <button
                 type="button"
@@ -706,7 +705,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                 className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>Add Another Link</span>
+                <span>+ Add New Link</span>
               </button>
             </div>
 
@@ -724,7 +723,7 @@ export const NewMockupView: React.FC<NewMockupViewProps> = ({
                       next[idx] = e.target.value;
                       setRefLinks(next);
                     }}
-                    placeholder={idx === 0 ? "https://drive.google.com/..." : "https://..."}
+                    placeholder="https://www.figma.com/... or https://we.tl/..."
                     className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-slate-900 text-sm focus:ring-2 focus:ring-[#0c192c] focus:outline-none transition-all placeholder:text-slate-400 bg-white"
                   />
                   {refLinks.length > 1 && (

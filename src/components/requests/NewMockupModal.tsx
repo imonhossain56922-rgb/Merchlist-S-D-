@@ -12,8 +12,6 @@ import {
   AlertCircle,
   Zap,
   Clock,
-  ShieldAlert,
-  Check,
   Palette,
   Plus,
   Trash2,
@@ -32,6 +30,18 @@ interface NewMockupModalProps {
   onSuccess: () => void;
 }
 
+// Requirement 5: Request Source dropdown must show exactly:
+// 1. Gallabox
+// 2. WhatsApp
+// 3. E-mail
+// 4. Others
+const REQUEST_SOURCE_OPTIONS: Array<{ id: RequestSource; label: string }> = [
+  { id: 'gallabox', label: 'Gallabox' },
+  { id: 'whatsapp', label: 'WhatsApp' },
+  { id: 'email', label: 'E-mail' },
+  { id: 'others', label: 'Others' },
+];
+
 export const NewMockupModal: React.FC<NewMockupModalProps> = ({
   currentUser,
   allUsers = [],
@@ -44,27 +54,33 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     return getActiveDesignerForSalesUser(currentUser);
   }, [currentUser]);
 
-  const [source, setSource] = useState<RequestSource>('whatsapp');
+  // Requirement 5: default starts at Gallabox
+  const [source, setSource] = useState<RequestSource>('gallabox');
   const [priority, setPriority] = useState<RequestPriority>('REGULAR');
   const [priorityWarning, setPriorityWarning] = useState<string | null>(null);
-  const [mockupTitle, setMockupTitle] = useState('');
+
+  // Form input states (Mockup Title removed per Requirement 4)
   const [items, setItems] = useState<string[]>(['']);
   const [clientName, setClientName] = useState('');
   const [clientMobileNumber, setClientMobileNumber] = useState('');
-  const [contactBy, setContactBy] = useState('');
+  const [contactBy, setContactBy] = useState('Gallabox');
   const [notes, setNotes] = useState('');
   const [refLinks, setRefLinks] = useState<string[]>(['']);
-  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; url: string; size: number; type: string; uploadedAt: string }>>([]);
+  const [attachments, setAttachments] = useState<
+    Array<{ id: string; name: string; url: string; size: number; type: string; uploadedAt: string }>
+  >([]);
 
   const [availableDesigners, setAvailableDesigners] = useState<UserProfile[]>([]);
+  const [capacity, setCapacity] = useState<DesignerCapacity | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  // Keep available designers updated from allUsers or fetch from Firestore if empty
+  // 1. Fetch active designers if not available from props
   useEffect(() => {
     const fromProps = allUsers.filter((u) => u.role === 'DESIGNER' && u.active && !u.deleted);
     if (fromProps.length > 0) {
       setAvailableDesigners(fromProps);
     } else if (isOpen) {
-      // Direct query fallback to ensure designers are always loaded
       getDocs(query(collection(db, 'users'), where('role', '==', 'DESIGNER')))
         .then((snap) => {
           const list = snap.docs
@@ -76,34 +92,61 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     }
   }, [allUsers, isOpen]);
 
+  // Requirement 1: Each Sales User must only be able to create/request mockups from Designer(s) assigned/authorized
+  const authorizedDesigners = useMemo(() => {
+    if (currentUser.role === 'SALES_REPRESENTATIVE') {
+      const activeId = activeAssignment.designerId || currentUser.assignedDesignerId;
+      if (activeId) {
+        const found = availableDesigners.find((d) => d.userId === activeId);
+        if (found) return [found];
+        return [
+          {
+            userId: activeId,
+            name: activeAssignment.designerName || currentUser.assignedDesignerName || 'Assigned Designer',
+            role: 'DESIGNER' as const,
+            active: true,
+            loginId: '',
+            createdAt: '',
+            updatedAt: '',
+          },
+        ];
+      }
+      return [];
+    }
+    return availableDesigners;
+  }, [currentUser.role, activeAssignment, currentUser.assignedDesignerId, currentUser.assignedDesignerName, availableDesigners]);
+
   const [selectedDesignerId, setSelectedDesignerId] = useState<string>(() => {
     return activeAssignment.designerId || currentUser.assignedDesignerId || '';
   });
 
-  // Automatically select active assigned designer or first available designer
+  // Automatically select active assigned designer
   useEffect(() => {
     const targetId = activeAssignment.designerId || currentUser.assignedDesignerId;
-    if (!selectedDesignerId || !availableDesigners.some((d) => d.userId === selectedDesignerId)) {
-      if (targetId && availableDesigners.some((d) => d.userId === targetId)) {
-        setSelectedDesignerId(targetId);
-      } else if (availableDesigners.length > 0) {
-        setSelectedDesignerId(availableDesigners[0].userId);
-      }
+    if (currentUser.role === 'SALES_REPRESENTATIVE') {
+      if (targetId) setSelectedDesignerId(targetId);
+    } else if (!selectedDesignerId && availableDesigners.length > 0) {
+      const match = availableDesigners.find((d) => d.userId === targetId);
+      setSelectedDesignerId(match ? match.userId : availableDesigners[0].userId);
     }
-  }, [availableDesigners, currentUser.assignedDesignerId, selectedDesignerId, activeAssignment]);
+  }, [availableDesigners, currentUser.assignedDesignerId, currentUser.role, selectedDesignerId, activeAssignment]);
 
-  const selectedDesigner = availableDesigners.find((d) => d.userId === selectedDesignerId) ||
-    allUsers.find((u) => u.userId === selectedDesignerId);
-
-  const [capacity, setCapacity] = useState<DesignerCapacity | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const selectedDesigner = useMemo(() => {
+    return (
+      authorizedDesigners.find((d) => d.userId === selectedDesignerId) ||
+      availableDesigners.find((d) => d.userId === selectedDesignerId) ||
+      allUsers.find((u) => u.userId === selectedDesignerId)
+    );
+  }, [authorizedDesigners, availableDesigners, allUsers, selectedDesignerId]);
 
   // Load Designer capacity
   useEffect(() => {
     const designerId = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId;
     if (designerId) {
-      getDesignerCapacity(designerId, selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName).then((cap) => {
+      getDesignerCapacity(
+        designerId,
+        selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName
+      ).then((cap) => {
         setCapacity(cap);
       });
     }
@@ -133,7 +176,6 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    // Convert file to mock secure data url for local preview/storage
     Array.from(files).forEach((file) => {
       if (file.size > 15 * 1024 * 1024) {
         setErrorMessage('File size exceeds 15MB limit.');
@@ -166,26 +208,27 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
     e.preventDefault();
     setErrorMessage(null);
 
-    const designerIdToUse = selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId;
-    const designerNameToUse = selectedDesigner?.name || activeAssignment.designerName || currentUser.assignedDesignerName || 'Assigned Designer';
+    const designerIdToUse =
+      selectedDesignerId || activeAssignment.designerId || currentUser.assignedDesignerId || authorizedDesigners[0]?.userId;
+    const designerNameToUse =
+      selectedDesigner?.name ||
+      activeAssignment.designerName ||
+      currentUser.assignedDesignerName ||
+      authorizedDesigners[0]?.name ||
+      'Assigned Designer';
 
     if (!designerIdToUse) {
-      setErrorMessage('Please select a Designer for this mockup request.');
+      setErrorMessage('Please select an authorized Designer for this mockup request.');
       return;
     }
 
     const validItems = items.map((i) => i.trim()).filter(Boolean);
     const validLinks = refLinks.map((l) => l.trim()).filter(Boolean);
 
-    if (!isGallabox) {
-      if (!mockupTitle.trim()) {
-        setErrorMessage('Mockup Title is required.');
-        return;
-      }
-      if (validItems.length === 0) {
-        setErrorMessage('Please provide at least one Item / Product Name.');
-        return;
-      }
+    // Requirement 9: Item / Product Name required only when source is WhatsApp, E-mail, or Others
+    if (!isGallabox && validItems.length === 0) {
+      setErrorMessage('Please provide at least one Item / Product Name.');
+      return;
     }
 
     // Capacity check
@@ -209,13 +252,13 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
       await createMockupRequest({
         source,
         priority,
-        mockupTitle: isGallabox ? null : mockupTitle.trim(),
+        mockupTitle: null, // Requirement 4: Mockup Title removed
         itemName: finalItem,
         itemNames: validItems.length > 0 ? validItems : (finalItem ? [finalItem] : []),
         clientName: clientName.trim() || null,
         clientMobileNumber: clientMobileNumber.trim() || null,
         contactBy: isGallabox ? null : contactBy.trim() || null,
-        notes: notes.trim(),
+        notes: notes.trim(), // Requirement 10: Optional notes
         referenceLinks: isGallabox ? null : validLinks[0] || null,
         additionalLinks: isGallabox ? null : validLinks[1] || null,
         additionalReferenceLinks: isGallabox ? [] : validLinks,
@@ -251,7 +294,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -266,7 +309,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
             </div>
           )}
 
-          {/* Designer Selection */}
+          {/* Designer Selection (Requirement 1: Authorized only; Requirement 2: NO Login IDs shown) */}
           <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5">
             <div className="flex items-center justify-between">
               <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
@@ -274,9 +317,9 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                 <span>Assigned Designer</span>
                 <span className="text-rose-500">*</span>
               </label>
-              {selectedDesigner && (
-                <span className="text-[10px] text-slate-500 font-mono">
-                  ID: {selectedDesigner.loginId}
+              {activeAssignment.isTemporary && (
+                <span className="text-[10px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-2 py-0.5 rounded">
+                  Temporary Coverage Active
                 </span>
               )}
             </div>
@@ -284,12 +327,13 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
               value={selectedDesignerId}
               onChange={(e) => setSelectedDesignerId(e.target.value)}
               required
-              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 text-xs font-medium focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+              disabled={currentUser.role === 'SALES_REPRESENTATIVE' && authorizedDesigners.length <= 1}
+              className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 text-xs font-semibold focus:ring-2 focus:ring-[#0c192c] focus:outline-none disabled:bg-slate-100 disabled:text-slate-800"
             >
-              <option value="">-- Select Designer --</option>
-              {availableDesigners.map((d) => (
+              {authorizedDesigners.length === 0 && <option value="">-- No Authorized Designer Assigned --</option>}
+              {authorizedDesigners.map((d) => (
                 <option key={d.userId} value={d.userId}>
-                  {d.name} (ID: {d.loginId})
+                  {d.name}
                 </option>
               ))}
             </select>
@@ -343,24 +387,24 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
             </div>
           )}
 
-          {/* Request Source Selection */}
+          {/* Requirement 5: Request Source (Gallabox, WhatsApp, E-mail, Others) */}
           <div>
             <label className="block text-xs font-bold text-slate-800 mb-2">
               Request Source <span className="text-rose-500">*</span>
             </label>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              {(['gallabox', 'whatsapp', 'email', 'others'] as RequestSource[]).map((src) => (
+              {REQUEST_SOURCE_OPTIONS.map((opt) => (
                 <button
-                  key={src}
+                  key={opt.id}
                   type="button"
-                  onClick={() => setSource(src)}
-                  className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all text-center capitalize ${
-                    source === src
+                  onClick={() => setSource(opt.id)}
+                  className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all text-center cursor-pointer ${
+                    source === opt.id
                       ? 'bg-[#0c192c] text-white border-[#0c192c] shadow-xs'
                       : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                   }`}
                 >
-                  {src}
+                  {opt.label}
                 </button>
               ))}
             </div>
@@ -375,7 +419,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
               <button
                 type="button"
                 onClick={() => setPriority('REGULAR')}
-                className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 ${
+                className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   priority === 'REGULAR'
                     ? 'bg-slate-900 text-white border-slate-900'
                     : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
@@ -389,7 +433,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                 type="button"
                 onClick={() => setPriority('URGENT')}
                 disabled={capacity ? !capacity.canAcceptUrgent : false}
-                className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 ${
+                className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   priority === 'URGENT'
                     ? 'bg-amber-500 text-white border-amber-600'
                     : capacity && !capacity.canAcceptUrgent
@@ -405,7 +449,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                 type="button"
                 onClick={() => setPriority('SUPER_URGENT')}
                 disabled={capacity ? !capacity.canAcceptSuperUrgent : false}
-                className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 ${
+                className={`px-3 py-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-center gap-1.5 cursor-pointer ${
                   priority === 'SUPER_URGENT'
                     ? 'bg-rose-600 text-white border-rose-700'
                     : capacity && !capacity.canAcceptSuperUrgent
@@ -420,7 +464,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
 
             {/* Turnaround Advisory Notice */}
             {priorityWarning && (
-              <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2 shadow-2xs">
+              <div className="mt-2.5 p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-900 flex items-start gap-2 shadow-2xs">
                 <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                 <div>
                   <span className="font-bold">Notice: </span>
@@ -445,7 +489,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
 
           {/* Form Fields: DYNAMIC BASED ON SOURCE */}
           {isGallabox ? (
-            /* GALLABOX SOURCE ONLY: Client Name, Client Mobile Number, Notes */
+            /* GALLABOX SOURCE ONLY: Client Name, Client Mobile Number, Optional Notes */
             <div className="space-y-4 pt-2 border-t border-slate-200">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
@@ -456,7 +500,8 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     type="text"
                     value={clientName}
                     onChange={(e) => setClientName(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                    placeholder="Client or Company Name"
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                   />
                 </div>
 
@@ -468,45 +513,33 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     type="tel"
                     value={clientMobileNumber}
                     onChange={(e) => setClientMobileNumber(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                    placeholder="+971 50 123 4567"
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                   />
                 </div>
               </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                  Notes / Instructions <span className="text-slate-400 font-normal">(Optional)</span>
+                  Notes / Design Instructions <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <textarea
                   rows={3}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                  placeholder="Design instructions, dimensions, color codes, placement details..."
+                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                 />
               </div>
             </div>
           ) : (
-            /* WHATSAPP / EMAIL / OTHERS: Standard Full Form */
+            /* WHATSAPP / E-MAIL / OTHERS: Multiple Item / Product Names, Client Info, Optional Notes, Multiple Additional Reference Links */
             <div className="space-y-4 pt-2 border-t border-slate-200">
-              <div>
-                <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                  Mockup Title <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={mockupTitle}
-                  onChange={(e) => setMockupTitle(e.target.value)}
-                  required
-                  placeholder="e.g. Acme Corporate Merch"
-                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
-                />
-              </div>
-
-              {/* Multiple Items */}
+              {/* Requirement 9: Multiple Item / Product Name entries with + Add Item/Product */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold text-slate-800">
-                    Item(s) / Product(s) <span className="text-rose-500">*</span>
+                  <label className="block text-xs font-bold text-slate-800">
+                    Item / Product Name <span className="text-rose-500">*</span>
                   </label>
                   <button
                     type="button"
@@ -514,7 +547,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Add Item</span>
+                    <span>+ Add Item/Product</span>
                   </button>
                 </div>
 
@@ -532,8 +565,8 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                           next[idx] = e.target.value;
                           setItems(next);
                         }}
-                        placeholder={idx === 0 ? "e.g. Black Dry-Fit Polo Shirt with Embroidery" : `Item #${idx + 1} name`}
-                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                        placeholder={`Product ${idx + 1} name`}
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                       />
                       {items.length > 1 && (
                         <button
@@ -559,7 +592,8 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     type="text"
                     value={clientName}
                     onChange={(e) => setClientName(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                    placeholder="Client or Company Name"
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                   />
                 </div>
 
@@ -571,7 +605,8 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     type="tel"
                     value={clientMobileNumber}
                     onChange={(e) => setClientMobileNumber(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                    placeholder="+971 50 123 4567"
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                   />
                 </div>
 
@@ -583,29 +618,31 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     type="text"
                     value={contactBy}
                     onChange={(e) => setContactBy(e.target.value)}
-                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                    placeholder="WhatsApp, E-mail, Phone..."
+                    className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                   />
                 </div>
               </div>
 
+              {/* Requirement 10: Notes / Design Instructions (Optional) */}
               <div>
                 <label className="block text-xs font-semibold text-slate-800 mb-1.5">
-                  Notes / Instructions <span className="text-slate-400 font-normal">(Optional)</span>
+                  Notes / Design Instructions <span className="text-slate-400 font-normal">(Optional)</span>
                 </label>
                 <textarea
                   rows={3}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Design details, pantone colors, placements..."
-                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                  className="w-full px-3.5 py-2 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                 />
               </div>
 
-              {/* Multiple Reference Links */}
+              {/* Requirement 3: Additional Reference Link (Figma / Canva / WeTransfer) with + Add New Link */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold text-slate-800">
-                    Reference Link(s)
+                  <label className="block text-xs font-bold text-slate-800">
+                    Additional Reference Link (Figma / Canva / WeTransfer)
                   </label>
                   <button
                     type="button"
@@ -613,22 +650,22 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     className="text-xs font-semibold text-cyan-700 hover:text-cyan-900 flex items-center gap-1 cursor-pointer"
                   >
                     <Plus className="w-3.5 h-3.5" />
-                    <span>Add Link</span>
+                    <span>+ Add New Link</span>
                   </button>
                 </div>
                 <div className="space-y-1.5">
                   {refLinks.map((link, idx) => (
                     <div key={idx} className="flex items-center gap-2">
                       <input
-                        type="text"
+                        type="url"
                         value={link}
                         onChange={(e) => {
                           const next = [...refLinks];
                           next[idx] = e.target.value;
                           setRefLinks(next);
                         }}
-                        placeholder={idx === 0 ? "https://drive.google.com/..." : "https://..."}
-                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none"
+                        placeholder="https://..."
+                        className="flex-1 px-3 py-1.5 rounded-lg border border-slate-300 text-slate-900 text-xs focus:ring-2 focus:ring-[#0c192c] focus:outline-none placeholder:text-slate-400"
                       />
                       {refLinks.length > 1 && (
                         <button
@@ -652,7 +689,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
             <label className="block text-xs font-semibold text-slate-800 mb-1.5">
               Attachments (Images / Reference files)
             </label>
-            <div className="border-2 border-dashed border-slate-300 rounded-xl p-4 text-center hover:bg-slate-50 transition-colors">
+            <div className="border-2 border-dashed border-slate-300 rounded-xl p-4 text-center hover:bg-slate-50 transition-colors relative">
               <Upload className="w-6 h-6 text-slate-400 mx-auto mb-1.5" />
               <p className="text-xs text-slate-600 font-medium">Click to select files</p>
               <input
@@ -674,7 +711,7 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
                     <button
                       type="button"
                       onClick={() => removeAttachment(att.id)}
-                      className="text-slate-400 hover:text-rose-600 p-1"
+                      className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -690,14 +727,14 @@ export const NewMockupModal: React.FC<NewMockupModalProps> = ({
               type="button"
               onClick={onClose}
               disabled={isSubmitting}
-              className="px-4 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors"
+              className="px-4 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={isSubmitting}
-              className="px-5 py-2.5 rounded-xl bg-[#0c192c] text-white text-xs font-semibold hover:bg-slate-800 transition-colors shadow-sm disabled:opacity-50"
+              className="px-5 py-2.5 rounded-xl bg-[#0c192c] text-white text-xs font-semibold hover:bg-slate-800 transition-colors shadow-sm disabled:opacity-50 cursor-pointer"
             >
               {isSubmitting ? 'Creating Request...' : 'Submit Request'}
             </button>
